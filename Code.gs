@@ -30,6 +30,8 @@ function onOpen() {
     .addSeparator()
     .addItem('投稿管理に新しい行を追加', 'addPostingRow')
     .addItem('切り抜き候補に新しい行を追加', 'addClipRow')
+    .addItem('選択中のライブから候補を追加', 'addClipFromSelectedLive')
+    .addItem('切り抜き管理を更新', 'refreshClipManagement')
     .addToUi();
 }
 
@@ -153,7 +155,7 @@ function setupLiveSheet_(ss) {
   const headers = [
     'No.', '配信日', 'タイトル', 'URL', '動画ID', '長さ（分）',
     '再生回数', '高評価数', 'ゲーム・カテゴリ', 'コラボ相手', '切り抜き候補数',
-    '確認状況', 'メモ'
+    '確認状況', 'メモ', 'Shorts化済み本数', '通常切り抜き化済み本数', '公開化率'
   ];
   let sheet = ss.getSheetByName('ライブ一覧');
   if (!sheet) sheet = ss.insertSheet('ライブ一覧');
@@ -166,24 +168,32 @@ function setupLiveSheet_(ss) {
 
   sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   sheet.setFrozenRows(1);
-  styleHeader_(sheet, '#1565C0');
-  setWidths_(sheet, [60,120,360,280,120,100,110,110,150,150,110,110,260]);
+  styleHeaderRange_(sheet.getRange(1, 1, 1, headers.length), '#1565C0');
+  setWidths_(sheet, [60,120,360,280,120,100,110,110,150,150,110,110,260,120,150,100]);
   setValidation_(sheet, 12, ['未確認', '確認中', '確認済み', '要確認']);
   applyFilter_(sheet, headers.length);
 }
 
 function setupClipSheet_(ss) {
+  // 既存の14列は位置を変えず、連動・分析用の列を右側に追加する。
   const headers = [
     'No.', '登録日', '元配信', '配信URL', '開始時間', '終了時間',
     '内容・オチ', '種類', '優先度', '編集状況', '担当', '投稿予定日',
-    '投稿済URL', 'メモ'
+    '投稿済URL', 'メモ', '元配信動画ID', 'AI選定理由', '用途', '採用判定',
+    '修正開始', '修正終了', 'タイトル案', '見どころ要素',
+    '公開後再生数', '公開後高評価数', '登録者獲得', '最終実績更新'
   ];
   const sheet = getOrCreateSheet_(ss, '切り抜き候補', headers);
-  styleHeader_(sheet, '#6A1B9A');
-  setWidths_(sheet, [60,110,280,260,90,90,360,120,90,110,110,120,260,260]);
+  styleHeaderRange_(sheet.getRange(1, 1, 1, headers.length), '#6A1B9A');
+  setWidths_(sheet, [
+    60,110,280,260,90,90,360,120,90,110,110,120,260,260,
+    125,300,120,110,90,90,300,220,120,130,110,140
+  ]);
   setValidation_(sheet, 8, ['爆笑', '神プレイ', '絶叫', '感動', '情報', 'その他']);
   setValidation_(sheet, 9, ['S', 'A', 'B', 'C']);
   setValidation_(sheet, 10, ['未着手', '編集中', '確認待ち', '完成', '保留']);
+  setValidation_(sheet, 17, ['Shorts', '通常切り抜き', '両方']);
+  setValidation_(sheet, 18, ['採用', '保留', '不採用']);
   applyFilter_(sheet, headers.length);
 }
 
@@ -885,14 +895,167 @@ function addPostingRow() {
 }
 
 function addClipRow() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('切り抜き候補');
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  setupClipSheet_(ss);
+  const sheet = ss.getSheetByName('切り抜き候補');
   const row = Math.max(sheet.getLastRow() + 1, 2);
   sheet.getRange(row, 1).setValue(row - 1);
   sheet.getRange(row, 2).setValue(new Date()).setNumberFormat('yyyy-mm-dd');
   sheet.getRange(row, 9).setValue('A');
   sheet.getRange(row, 10).setValue('未着手');
+  sheet.getRange(row, 18).setValue('保留');
   sheet.activate();
   sheet.setActiveRange(sheet.getRange(row, 3));
+}
+
+function addClipFromSelectedLive() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const active = ss.getActiveSheet();
+  const rowNumber = active.getActiveRange().getRow();
+  if (active.getName() !== 'ライブ一覧' || rowNumber < 2) {
+    SpreadsheetApp.getUi().alert('ライブ一覧で、候補を作りたい配信の行を選択してください。');
+    return;
+  }
+
+  setupClipSheet_(ss);
+  const live = active.getRange(rowNumber, 1, 1, 16).getValues()[0];
+  const sheet = ss.getSheetByName('切り抜き候補');
+  const row = Math.max(sheet.getLastRow() + 1, 2);
+  const values = new Array(26).fill('');
+  values[0] = row - 1;
+  values[1] = new Date();
+  values[2] = live[2];
+  values[3] = live[3];
+  values[8] = 'A';
+  values[9] = '未着手';
+  values[14] = live[4];
+  values[17] = '保留';
+  sheet.getRange(row, 1, 1, values.length).setValues([values]);
+  sheet.getRange(row, 2).setNumberFormat('yyyy-mm-dd');
+  sheet.activate();
+  sheet.setActiveRange(sheet.getRange(row, 5));
+  refreshClipManagement_();
+}
+
+function refreshClipManagement() {
+  const result = refreshClipManagement_();
+  SpreadsheetApp.getUi().alert(
+    '切り抜き管理を更新しました。候補 ' + result.clipCount + '件、ライブ ' + result.liveCount + '件。'
+  );
+}
+
+function refreshClipManagement_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  setupClipSheet_(ss);
+  setupLiveSheet_(ss);
+
+  const clipSheet = ss.getSheetByName('切り抜き候補');
+  const liveSheet = ss.getSheetByName('ライブ一覧');
+  const liveByUrl = {};
+  const liveByTitle = {};
+  const liveRows = liveSheet.getLastRow() >= 2
+    ? liveSheet.getRange(2, 1, liveSheet.getLastRow() - 1, 16).getValues()
+    : [];
+
+  liveRows.forEach(row => {
+    const item = { title: String(row[2] || ''), url: String(row[3] || ''), videoId: String(row[4] || '') };
+    if (item.url) liveByUrl[item.url] = item;
+    if (item.title) liveByTitle[item.title] = item;
+  });
+
+  const performance = buildPublishedPerformanceMap_(ss);
+  const clipLastRow = clipSheet.getLastRow();
+  const clipRows = clipLastRow >= 2
+    ? clipSheet.getRange(2, 1, clipLastRow - 1, 26).getValues()
+    : [];
+  const summary = {};
+
+  clipRows.forEach((row, index) => {
+    let sourceId = String(row[14] || '').trim();
+    const sourceUrl = String(row[3] || '').trim();
+    const sourceTitle = String(row[2] || '').trim();
+    const matched = liveByUrl[sourceUrl] || liveByTitle[sourceTitle];
+    if (!sourceId && matched) sourceId = matched.videoId;
+
+    const publishedUrl = String(row[12] || '').trim();
+    const publishedId = extractYouTubeVideoId_(publishedUrl);
+    const stats = publishedId && performance[publishedId] ? performance[publishedId] : null;
+    const outputRow = index + 2;
+
+    clipSheet.getRange(outputRow, 15).setValue(sourceId);
+    clipSheet.getRange(outputRow, 23, 1, 4).setValues([[
+      stats ? stats.views : '',
+      stats ? stats.likes : '',
+      stats ? stats.subscribers : '',
+      stats ? new Date() : ''
+    ]]);
+    if (stats) clipSheet.getRange(outputRow, 26).setNumberFormat('yyyy-mm-dd hh:mm');
+
+    if (!sourceId) return;
+    if (!summary[sourceId]) summary[sourceId] = { total: 0, shorts: 0, normal: 0, published: 0 };
+    summary[sourceId].total++;
+    if (publishedUrl) {
+      summary[sourceId].published++;
+      const usage = String(row[16] || '');
+      if (usage === 'Shorts' || usage === '両方') summary[sourceId].shorts++;
+      if (usage === '通常切り抜き' || usage === '両方') summary[sourceId].normal++;
+    }
+  });
+
+  liveRows.forEach((row, index) => {
+    const videoId = String(row[4] || '');
+    const counts = summary[videoId] || { total: 0, shorts: 0, normal: 0, published: 0 };
+    const outputRow = index + 2;
+    liveSheet.getRange(outputRow, 11).setValue(counts.total);
+    liveSheet.getRange(outputRow, 14, 1, 3).setValues([[
+      counts.shorts,
+      counts.normal,
+      counts.total > 0 ? counts.published / counts.total : 0
+    ]]);
+  });
+
+  if (liveRows.length) {
+    liveSheet.getRange(2, 11, liveRows.length, 1).setNumberFormat('0');
+    liveSheet.getRange(2, 14, liveRows.length, 2).setNumberFormat('0');
+    liveSheet.getRange(2, 16, liveRows.length, 1).setNumberFormat('0.0%');
+  }
+  return { clipCount: clipRows.length, liveCount: liveRows.length };
+}
+
+function buildPublishedPerformanceMap_(ss) {
+  const map = {};
+  ['Shorts一覧', '通常動画一覧', 'ライブ一覧'].forEach(name => {
+    const sheet = ss.getSheetByName(name);
+    if (!sheet || sheet.getLastRow() < 2) return;
+    sheet.getRange(2, 1, sheet.getLastRow() - 1, Math.max(sheet.getLastColumn(), 8))
+      .getValues().forEach(row => {
+        const id = String(row[4] || '').trim();
+        if (!id) return;
+        map[id] = {
+          views: Number(row[6] || 0),
+          likes: Number(row[7] || 0),
+          subscribers: map[id] ? map[id].subscribers : 0
+        };
+      });
+  });
+
+  const analytics = ss.getSheetByName('Analytics_動画別');
+  if (analytics && analytics.getLastRow() >= 2) {
+    analytics.getRange(2, 1, analytics.getLastRow() - 1, 7).getValues().forEach(row => {
+      const id = String(row[0] || '').trim();
+      if (!id || id === '合計') return;
+      if (!map[id]) map[id] = { views: 0, likes: 0, subscribers: 0 };
+      map[id].subscribers = Number(row[6] || 0);
+    });
+  }
+  return map;
+}
+
+function extractYouTubeVideoId_(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const match = text.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|shorts\/|live\/))([A-Za-z0-9_-]{11})/);
+  return match ? match[1] : (/^[A-Za-z0-9_-]{11}$/.test(text) ? text : '');
 }
 
 function updateShortsSheet_(videos) {
@@ -1094,24 +1257,17 @@ function updateNormalVideosSheet_(videos) {
 function updateLiveSheet_(streams) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName('ライブ一覧') || ss.insertSheet('ライブ一覧');
-
   setupLiveSheet_(ss);
 
-  const columnCount = 13;
+  const columnCount = 16;
   const lastRow = sheet.getLastRow();
   const existingValues = lastRow >= 2
     ? sheet.getRange(2, 1, lastRow - 1, columnCount).getValues()
     : [];
-
   const rowsByVideoId = {};
   existingValues.forEach((row, index) => {
     const videoId = String(row[4] || '');
-    if (videoId) {
-      rowsByVideoId[videoId] = {
-        rowNumber: index + 2,
-        values: row
-      };
-    }
+    if (videoId) rowsByVideoId[videoId] = { rowNumber: index + 2, values: row };
   });
 
   let addedCount = 0;
@@ -1121,24 +1277,8 @@ function updateLiveSheet_(streams) {
   streams.forEach(stream => {
     const videoId = String(stream.videoId || '');
     if (!videoId) return;
-
     seen[videoId] = true;
     const existing = rowsByVideoId[videoId];
-
-    let category = stream.suggestedCategory || 'その他';
-    let collaborator = '';
-    let clipCount = 0;
-    let reviewStatus = '未確認';
-    let memo = '';
-
-    if (existing) {
-      category = existing.values[8] || category;
-      collaborator = existing.values[9] || '';
-      clipCount = Number(existing.values[10] || 0);
-      reviewStatus = existing.values[11] || '未確認';
-      memo = existing.values[12] || '';
-    }
-
     const row = [
       '',
       parseYouTubeDate_(stream.publishedAt),
@@ -1148,11 +1288,14 @@ function updateLiveSheet_(streams) {
       Math.round(Number(stream.durationSeconds || 0) / 6) / 10,
       Number(stream.viewCount || 0),
       Number(stream.likeCount || 0),
-      category,
-      collaborator,
-      clipCount,
-      reviewStatus,
-      memo
+      existing ? (existing.values[8] || stream.suggestedCategory || 'その他') : (stream.suggestedCategory || 'その他'),
+      existing ? (existing.values[9] || '') : '',
+      existing ? Number(existing.values[10] || 0) : 0,
+      existing ? (existing.values[11] || '未確認') : '未確認',
+      existing ? (existing.values[12] || '') : '',
+      existing ? Number(existing.values[13] || 0) : 0,
+      existing ? Number(existing.values[14] || 0) : 0,
+      existing ? Number(existing.values[15] || 0) : 0
     ];
 
     if (existing) {
@@ -1165,33 +1308,21 @@ function updateLiveSheet_(streams) {
   });
 
   Object.keys(rowsByVideoId).forEach(videoId => {
-    if (!seen[videoId]) {
-      const rowNumber = rowsByVideoId[videoId].rowNumber;
-      sheet.getRange(rowNumber, 12).setValue('要確認');
-    }
+    if (!seen[videoId]) sheet.getRange(rowsByVideoId[videoId].rowNumber, 12).setValue('要確認');
   });
 
   const updatedLastRow = sheet.getLastRow();
   if (updatedLastRow >= 2) {
-    sheet.getRange(2, 1, updatedLastRow - 1, columnCount)
-      .sort([{ column: 2, ascending: false }]);
-
+    sheet.getRange(2, 1, updatedLastRow - 1, columnCount).sort([{ column: 2, ascending: false }]);
     const numbers = [];
-    for (let i = 1; i <= updatedLastRow - 1; i++) {
-      numbers.push([i]);
-    }
+    for (let i = 1; i <= updatedLastRow - 1; i++) numbers.push([i]);
     sheet.getRange(2, 1, numbers.length, 1).setValues(numbers);
-
-    sheet.getRange(2, 2, updatedLastRow - 1, 1)
-      .setNumberFormat('yyyy-mm-dd hh:mm');
-    sheet.getRange(2, 6, updatedLastRow - 1, 1)
-      .setNumberFormat('0.0');
-    sheet.getRange(2, 7, updatedLastRow - 1, 2)
-      .setNumberFormat('#,##0');
-    sheet.getRange(2, 11, updatedLastRow - 1, 1)
-      .setNumberFormat('0');
+    sheet.getRange(2, 2, updatedLastRow - 1, 1).setNumberFormat('yyyy-mm-dd hh:mm');
+    sheet.getRange(2, 6, updatedLastRow - 1, 1).setNumberFormat('0.0');
+    sheet.getRange(2, 7, updatedLastRow - 1, 2).setNumberFormat('#,##0');
   }
 
+  refreshClipManagement_();
   return { addedCount, updatedCount };
 }
 
