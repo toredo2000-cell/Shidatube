@@ -1,5 +1,18 @@
 const SETUP_TOKEN_PROPERTY = 'SHIDATUBE_SETUP_TOKEN';
 const SHEET_NAME = 'Shorts一覧';
+const ANALYTICS_FOLDER_ID = '1tcNK-v0rdVBGdN-GXq_g5PYravTjHzWZ';
+const ZIP_ANALYTICS_SHEET_PREFIX = '分析_';
+
+const ZIP_ANALYTICS_CONFIG = [
+  { key: 'チャンネル登録状況', title: '登録済み／未登録' },
+  { key: 'チャンネル登録元', title: 'チャンネル登録元' },
+  { key: '地域', title: '地域 TOP10' },
+  { key: 'デバイスのタイプ', title: 'デバイス構成' },
+  { key: '視聴者の性別', title: '視聴者の性別' },
+  { key: '字幕', title: '字幕利用' },
+  { key: '翻訳版の使用', title: '翻訳版の使用' },
+  { key: '終了画面要素', title: '終了画面' }
+];
 
 const HEADERS = [
   'No.',
@@ -27,6 +40,7 @@ function onOpen() {
     .addItem('ダッシュボードを更新', 'refreshDashboard')
     .addItem('分析CSVシートを準備', 'setupAnalyticsSheets')
     .addItem('90日分析を更新', 'refreshAnalyticsDashboard')
+    .addItem('YouTube分析ZIPを取り込む', 'importAnalyticsZips')
     .addSeparator()
     .addItem('投稿管理に新しい行を追加', 'addPostingRow')
     .addItem('切り抜き候補に新しい行を追加', 'addClipRow')
@@ -46,6 +60,7 @@ function setupDailyOperations() {
   setupIdeaSheet_(ss);
   setupMasterSheet_(ss);
   setupAnalyticsSheets_(ss);
+  setupZipAnalyticsSheets_(ss);
   setupDashboard_(ss);
   setupAnalyticsDashboard_(ss);
 
@@ -626,6 +641,115 @@ function refreshAnalyticsDashboard() {
   SpreadsheetApp.getUi().alert('90日分析を更新しました。');
 }
 
+/** Driveフォルダ内のYouTube Studio分析ZIPから最新8種類を取り込む。 */
+function importAnalyticsZips() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ui = SpreadsheetApp.getUi();
+
+  try {
+    setupZipAnalyticsSheets_(ss);
+    const files = findLatestAnalyticsZipFiles_();
+    const imported = [];
+    const missing = [];
+
+    ZIP_ANALYTICS_CONFIG.forEach(config => {
+      const fileInfo = files[config.key];
+      if (!fileInfo) {
+        missing.push(config.key);
+        return;
+      }
+      const table = extractAnalyticsZipTable_(fileInfo.file);
+      writeZipAnalyticsSheet_(
+        ss.getSheetByName(ZIP_ANALYTICS_SHEET_PREFIX + config.key),
+        config,
+        fileInfo,
+        table
+      );
+      imported.push(config.key);
+    });
+
+    setupAnalyticsDashboard_(ss);
+    ss.setActiveSheet(ss.getSheetByName('Analytics Dashboard'));
+    let message = imported.length + '種類の分析データを取り込みました。';
+    if (missing.length) message += '\n未検出: ' + missing.join('、');
+    ui.alert(message);
+  } catch (error) {
+    ui.alert('分析ZIPの取り込みに失敗しました。\n' + String(error && error.message ? error.message : error));
+    throw error;
+  }
+}
+
+function setupZipAnalyticsSheets_(ss) {
+  ZIP_ANALYTICS_CONFIG.forEach(config => {
+    const name = ZIP_ANALYTICS_SHEET_PREFIX + config.key;
+    let sheet = ss.getSheetByName(name);
+    if (!sheet) sheet = ss.insertSheet(name);
+    sheet.setFrozenRows(6);
+    sheet.setTabColor('#546E7A');
+  });
+}
+
+function findLatestAnalyticsZipFiles_() {
+  const folder = DriveApp.getFolderById(ANALYTICS_FOLDER_ID);
+  const iterator = folder.getFiles();
+  const latest = {};
+
+  while (iterator.hasNext()) {
+    const file = iterator.next();
+    const name = file.getName();
+    if (!/\.zip$/i.test(name)) continue;
+    const config = ZIP_ANALYTICS_CONFIG.find(item =>
+      name.indexOf(item.key + ' ') === 0 || name.indexOf(item.key + '_') === 0
+    );
+    if (!config) continue;
+    const period = parseAnalyticsZipPeriod_(name);
+    const rank = (period.end || '') + '|' + Utilities.formatDate(file.getLastUpdated(), 'UTC', 'yyyyMMddHHmmss');
+    if (!latest[config.key] || rank > latest[config.key].rank) {
+      latest[config.key] = { file: file, name: name, start: period.start, end: period.end, rank: rank };
+    }
+  }
+  return latest;
+}
+
+function parseAnalyticsZipPeriod_(fileName) {
+  const match = fileName.match(/(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})/);
+  return match ? { start: match[1], end: match[2] } : { start: '', end: '' };
+}
+
+function extractAnalyticsZipTable_(file) {
+  const blobs = Utilities.unzip(file.getBlob());
+  const tableBlob = blobs.find(blob => /(^|\/)表データ\.csv$/.test(blob.getName()));
+  if (!tableBlob) throw new Error(file.getName() + ' に「表データ.csv」がありません。');
+  const csv = tableBlob.getDataAsString('UTF-8').replace(/^\uFEFF/, '');
+  const values = Utilities.parseCsv(csv);
+  if (!values.length || !values[0].length) throw new Error(file.getName() + ' の「表データ.csv」が空です。');
+  return values;
+}
+
+function writeZipAnalyticsSheet_(sheet, config, fileInfo, table) {
+  sheet.clear();
+  sheet.getCharts().forEach(chart => sheet.removeChart(chart));
+  sheet.getRange('A1:D1').merge().setValue(config.title)
+    .setBackground('#37474F').setFontColor('#FFFFFF').setFontWeight('bold').setFontSize(14);
+  sheet.getRange('A2:B4').setValues([
+    ['対象期間', fileInfo.start && fileInfo.end ? fileInfo.start + ' ～ ' + fileInfo.end : 'ファイル名から取得できず'],
+    ['取込元', fileInfo.name],
+    ['取込日時', new Date()]
+  ]);
+  sheet.getRange('A2:A4').setFontWeight('bold').setBackground('#ECEFF1');
+  sheet.getRange('B4').setNumberFormat('yyyy-mm-dd hh:mm');
+  const width = Math.max.apply(null, table.map(row => row.length));
+  const normalized = table.map(row => row.concat(new Array(width - row.length).fill('')));
+  sheet.getRange(6, 1, normalized.length, width).setValues(normalized);
+  styleHeaderRange_(sheet.getRange(6, 1, 1, width), '#546E7A');
+  if (normalized.length > 1 && width > 1) {
+    sheet.getRange(7, 2, normalized.length - 1, width - 1).setNumberFormat('#,##0.00');
+  }
+  sheet.autoResizeColumns(1, width);
+  sheet.setColumnWidth(1, Math.max(sheet.getColumnWidth(1), 180));
+  sheet.setFrozenRows(6);
+}
+
 function setupAnalyticsDashboard_(ss) {
   let dashboard = ss.getSheetByName('Analytics Dashboard');
   if (!dashboard) dashboard = ss.insertSheet('Analytics Dashboard', 1);
@@ -699,9 +823,77 @@ function setupAnalyticsDashboard_(ss) {
   writeAnalyticsRanking_(dashboard, items, '登録者獲得 TOP10', 26, 'subscribers', '#2E7D32');
   writeAnalyticsRanking_(dashboard, items, '総再生時間 TOP10', 39, 'watchHours', '#1565C0');
   writeAnalyticsDailyChart_(dashboard, ss.getSheetByName(ANALYTICS_DAILY_SHEET), 53);
+  renderZipAnalyticsDashboard_(ss, dashboard);
 
   setWidths_(dashboard, [60, 130, 330, 100, 110, 110, 105, 115, 105, 110]);
   dashboard.setFrozenRows(2);
+}
+
+function renderZipAnalyticsDashboard_(ss, dashboard) {
+  const startRow = 76;
+  dashboard.getRange(startRow, 1, 1, 10).merge()
+    .setValue('YouTube Studio 詳細分析')
+    .setBackground('#37474F').setFontColor('#FFFFFF').setFontWeight('bold')
+    .setFontSize(16).setHorizontalAlignment('center');
+
+  const period = getZipAnalyticsPeriod_(ss);
+  dashboard.getRange(startRow + 1, 1, 1, 10).merge()
+    .setValue(period ? '対象期間: ' + period : '「YouTube分析ZIPを取り込む」を実行してください')
+    .setBackground('#ECEFF1').setHorizontalAlignment('center');
+
+  renderZipAnalyticsBlock_(ss, dashboard, 'チャンネル登録状況', 79, 1, 4);
+  renderZipAnalyticsBlock_(ss, dashboard, 'チャンネル登録元', 79, 6, 6);
+  renderZipAnalyticsBlock_(ss, dashboard, 'デバイスのタイプ', 88, 1, 6);
+  renderZipAnalyticsBlock_(ss, dashboard, '視聴者の性別', 88, 6, 4);
+  renderZipAnalyticsBlock_(ss, dashboard, '地域', 97, 1, 10);
+  renderZipAnalyticsBlock_(ss, dashboard, '字幕', 97, 6, 8);
+  renderZipAnalyticsBlock_(ss, dashboard, '翻訳版の使用', 110, 1, 5);
+  renderZipAnalyticsBlock_(ss, dashboard, '終了画面要素', 110, 6, 8);
+}
+
+function getZipAnalyticsPeriod_(ss) {
+  for (let i = 0; i < ZIP_ANALYTICS_CONFIG.length; i++) {
+    const source = ss.getSheetByName(ZIP_ANALYTICS_SHEET_PREFIX + ZIP_ANALYTICS_CONFIG[i].key);
+    if (source && source.getRange('B2').getDisplayValue()) return source.getRange('B2').getDisplayValue();
+  }
+  return '';
+}
+
+function renderZipAnalyticsBlock_(ss, dashboard, key, row, column, maxRows) {
+  const config = ZIP_ANALYTICS_CONFIG.find(item => item.key === key);
+  dashboard.getRange(row, column, 1, 2).merge().setValue(config ? config.title : key)
+    .setBackground('#607D8B').setFontColor('#FFFFFF').setFontWeight('bold')
+    .setHorizontalAlignment('center');
+
+  const source = ss.getSheetByName(ZIP_ANALYTICS_SHEET_PREFIX + key);
+  if (!source || source.getLastRow() < 7) {
+    dashboard.getRange(row + 1, column, 1, 2).merge().setValue('データ未取込');
+    return;
+  }
+
+  const values = source.getRange(6, 1, source.getLastRow() - 5, source.getLastColumn()).getDisplayValues();
+  const header = values[0] || [];
+  const body = values.slice(1).filter(item => item[0] && item[0] !== '合計').slice(0, maxRows);
+  dashboard.getRange(row + 1, column, 1, 2).setValues([[header[0] || key, header[1] || '値']]);
+  styleHeaderRange_(dashboard.getRange(row + 1, column, 1, 2), '#90A4AE');
+
+  if (key === '終了画面要素') {
+    const total = values.slice(1).find(item => item[0] === '合計');
+    if (total) {
+      dashboard.getRange(row + 2, column, 3, 2).setValues([
+        ['表示回数', total[1] || '0'],
+        ['クリック数', total[2] || '0'],
+        ['クリック率', (total[3] || '0') + '%']
+      ]);
+    }
+  } else if (body.length) {
+    dashboard.getRange(row + 2, column, body.length, 2).setValues(body.map(item => [item[0], item[1]]));
+    dashboard.getRange(row + 2, column + 1, body.length, 1).setHorizontalAlignment('right');
+  }
+
+  const displayedRows = key === '終了画面要素' ? 4 : Math.max(body.length + 1, 2);
+  dashboard.getRange(row + 1, column, displayedRows, 2)
+    .setBorder(true, true, true, true, true, true).setWrap(true);
 }
 
 function readAnalyticsVideoRows_(sheet) {
