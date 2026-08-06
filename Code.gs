@@ -318,57 +318,36 @@ function setupDashboard_(ss) {
     ['5', 'ネタ帳から次企画を選定', '', '', '']
   ]).setBorder(true, true, true, true, true, true);
 
-  // Shorts再生数 TOP10
-  sheet.getRange('A14:E14').merge()
+  // 再生数 TOP10（サムネイル・YouTubeリンク付き）
+  sheet.getRange('A14:F14').merge()
     .setValue('Shorts 再生数 TOP10')
     .setBackground('#1565C0')
     .setFontColor('#FFFFFF')
     .setFontWeight('bold')
     .setHorizontalAlignment('center');
+  sheet.getRange('A15:F15').setValues([['順位', 'サムネイル', 'タイトル', '投稿日', '再生回数', '高評価数']]);
+  styleHeaderRange_(sheet.getRange('A15:F15'), '#263238');
+  writeDashboardTop10_(sheet, 'Shorts一覧', 16, 1);
 
-  sheet.getRange('A15:E15').setValues([['順位', 'タイトル', '投稿日', '再生回数', '高評価数']]);
-  styleHeaderRange_(sheet.getRange('A15:E15'), '#263238');
-
-  sheet.getRange('A16').setFormula('=SEQUENCE(10)');
-  sheet.getRange('B16').setFormula(
-    '=IFERROR(ARRAY_CONSTRAIN(SORT(FILTER({\'Shorts一覧\'!C2:C,\'Shorts一覧\'!B2:B,\'Shorts一覧\'!G2:G,\'Shorts一覧\'!H2:H},\'Shorts一覧\'!C2:C<>""),3,FALSE),10,4),"")'
-  );
-  sheet.getRange('C16:C25').setNumberFormat('yyyy-mm-dd');
-  sheet.getRange('D16:E25').setNumberFormat('#,##0');
-
-  // 通常動画 再生数 TOP10
-  sheet.getRange('A27:E27').merge()
+  sheet.getRange('A27:F27').merge()
     .setValue('通常動画 再生数 TOP10')
     .setBackground('#00838F')
     .setFontColor('#FFFFFF')
     .setFontWeight('bold')
     .setHorizontalAlignment('center');
+  sheet.getRange('A28:F28').setValues([['順位', 'サムネイル', 'タイトル', '投稿日', '再生回数', '高評価数']]);
+  styleHeaderRange_(sheet.getRange('A28:F28'), '#263238');
+  writeDashboardTop10_(sheet, '通常動画一覧', 29, 1);
 
-  sheet.getRange('A28:E28').setValues([['順位', 'タイトル', '投稿日', '再生回数', '高評価数']]);
-  styleHeaderRange_(sheet.getRange('A28:E28'), '#263238');
-  sheet.getRange('A29').setFormula('=SEQUENCE(10)');
-  sheet.getRange('B29').setFormula(
-    '=IFERROR(ARRAY_CONSTRAIN(SORT(FILTER({\'通常動画一覧\'!C2:C,\'通常動画一覧\'!B2:B,\'通常動画一覧\'!G2:G,\'通常動画一覧\'!H2:H},\'通常動画一覧\'!C2:C<>""),3,FALSE),10,4),"")'
-  );
-  sheet.getRange('C29:C38').setNumberFormat('yyyy-mm-dd');
-  sheet.getRange('D29:E38').setNumberFormat('#,##0');
-
-  // ライブ配信 再生数 TOP10
-  sheet.getRange('G27:K27').merge()
+  sheet.getRange('H27:M27').merge()
     .setValue('ライブ配信 再生数 TOP10')
     .setBackground('#1565C0')
     .setFontColor('#FFFFFF')
     .setFontWeight('bold')
     .setHorizontalAlignment('center');
-
-  sheet.getRange('G28:K28').setValues([['順位', 'タイトル', '投稿日', '再生回数', '高評価数']]);
-  styleHeaderRange_(sheet.getRange('G28:K28'), '#263238');
-  sheet.getRange('G29').setFormula('=SEQUENCE(10)');
-  sheet.getRange('H29').setFormula(
-    '=IFERROR(ARRAY_CONSTRAIN(SORT(FILTER({\'ライブ一覧\'!C2:C,\'ライブ一覧\'!B2:B,\'ライブ一覧\'!G2:G,\'ライブ一覧\'!H2:H},\'ライブ一覧\'!C2:C<>""),3,FALSE),10,4),"")'
-  );
-  sheet.getRange('I29:I38').setNumberFormat('yyyy-mm-dd');
-  sheet.getRange('J29:K38').setNumberFormat('#,##0');
+  sheet.getRange('H28:M28').setValues([['順位', 'サムネイル', 'タイトル', '投稿日', '再生回数', '高評価数']]);
+  styleHeaderRange_(sheet.getRange('H28:M28'), '#263238');
+  writeDashboardTop10_(sheet, 'ライブ一覧', 29, 8);
 
   // カテゴリ別平均再生数
   sheet.getRange('G14:J14').merge()
@@ -399,8 +378,60 @@ function setupDashboard_(ss) {
 
   sheet.getRange('H16:H20').setNumberFormat('#,##0');
 
-  setWidths_(sheet, [70, 360, 105, 110, 100, 35, 70, 360, 105, 110, 100]);
+  setWidths_(sheet, [60, 130, 300, 105, 110, 100, 35, 60, 130, 300, 105, 110, 100]);
   sheet.setFrozenRows(1);
+}
+
+
+function writeDashboardTop10_(dashboard, sourceSheetName, startRow, startColumn) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const source = ss.getSheetByName(sourceSheetName);
+  const outputRange = dashboard.getRange(startRow, startColumn, 10, 6);
+  outputRange.clearContent();
+
+  if (!source || source.getLastRow() < 2) return;
+
+  // B:H = 投稿日、タイトル、URL、動画ID、長さ、再生回数、高評価数
+  const rows = source.getRange(2, 2, source.getLastRow() - 1, 7)
+    .getValues()
+    .filter(row => row[1] && row[3])
+    .sort((a, b) => Number(b[5] || 0) - Number(a[5] || 0))
+    .slice(0, 10);
+
+  rows.forEach((row, index) => {
+    const targetRow = startRow + index;
+    const publishedAt = row[0];
+    const title = String(row[1] || '');
+    const url = String(row[2] || '');
+    const videoId = String(row[3] || '');
+    const viewCount = Number(row[5] || 0);
+    const likeCount = Number(row[6] || 0);
+
+    dashboard.getRange(targetRow, startColumn).setValue(index + 1);
+    dashboard.getRange(targetRow, startColumn + 1).setFormula(
+      '=IFERROR(IMAGE("https://i.ytimg.com/vi/' + videoId + '/mqdefault.jpg",4,68,120),"")'
+    );
+
+    const titleCell = dashboard.getRange(targetRow, startColumn + 2);
+    if (url) {
+      titleCell.setRichTextValue(
+        SpreadsheetApp.newRichTextValue().setText(title).setLinkUrl(url).build()
+      );
+    } else {
+      titleCell.setValue(title);
+    }
+
+    dashboard.getRange(targetRow, startColumn + 3, 1, 3)
+      .setValues([[publishedAt, viewCount, likeCount]]);
+    dashboard.setRowHeight(targetRow, 75);
+  });
+
+  dashboard.getRange(startRow, startColumn + 3, 10, 1).setNumberFormat('yyyy-mm-dd');
+  dashboard.getRange(startRow, startColumn + 4, 10, 2).setNumberFormat('#,##0');
+  outputRange
+    .setVerticalAlignment('middle')
+    .setWrap(true)
+    .setBorder(true, true, true, true, true, true);
 }
 
 function refreshDashboard() {
