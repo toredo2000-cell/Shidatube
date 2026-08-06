@@ -49,6 +49,20 @@ function onOpen() {
     .addToUi();
 }
 
+function onEdit(e) {
+  if (!e || !e.range) return;
+
+  const range = e.range;
+  const sheet = range.getSheet();
+  if (sheet.getName() !== '切り抜き候補' || range.getRow() < 2) return;
+
+  const firstColumn = range.getColumn();
+  const lastColumn = range.getLastColumn();
+  if (firstColumn <= 5 && lastColumn >= 4) {
+    applyClipStartTimeLinks_(sheet, range.getRow(), range.getNumRows());
+  }
+}
+
 function setupDailyOperations() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
 
@@ -212,6 +226,7 @@ function setupClipSheet_(ss) {
   setValidation_(sheet, 17, ['Shorts', '通常切り抜き', '両方']);
   setValidation_(sheet, 18, ['採用', '保留', '不採用']);
   applyFilter_(sheet, headers.length);
+  applyClipStartTimeLinks_(sheet, 2, Math.max(sheet.getLastRow() - 1, 0));
 }
 
 function setupPostingSheet_(ss) {
@@ -1340,6 +1355,55 @@ function buildPublishedPerformanceMap_(ss) {
     });
   }
   return map;
+}
+
+function applyClipStartTimeLinks_(sheet, startRow, numRows) {
+  const firstRow = Math.max(Number(startRow) || 2, 2);
+  const availableRows = sheet.getLastRow() - firstRow + 1;
+  const rowCount = Math.min(Number(numRows) || availableRows, availableRows);
+  if (rowCount <= 0) return;
+
+  const sourceValues = sheet.getRange(firstRow, 4, rowCount, 2).getDisplayValues();
+  sourceValues.forEach((row, index) => {
+    const sourceUrl = String(row[0] || '').trim();
+    const timeText = String(row[1] || '').trim();
+    const seconds = clipTimeToSeconds_(timeText);
+    const timestampUrl = buildYouTubeTimestampUrl_(sourceUrl, seconds);
+    if (!timeText || !timestampUrl) return;
+
+    const richText = SpreadsheetApp.newRichTextValue()
+      .setText(timeText)
+      .setLinkUrl(timestampUrl)
+      .build();
+    sheet.getRange(firstRow + index, 5).setRichTextValue(richText);
+  });
+}
+
+function clipTimeToSeconds_(value) {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  if (/^\d+(?:\.\d+)?$/.test(text)) return Math.floor(Number(text));
+
+  const parts = text.split(':');
+  if (parts.length < 2 || parts.length > 3 || parts.some(part => !/^\d+(?:\.\d+)?$/.test(part))) {
+    return null;
+  }
+
+  const numbers = parts.map(Number);
+  const seconds = parts.length === 3
+    ? numbers[0] * 3600 + numbers[1] * 60 + numbers[2]
+    : numbers[0] * 60 + numbers[1];
+  return Math.floor(seconds);
+}
+
+function buildYouTubeTimestampUrl_(sourceUrl, seconds) {
+  if (!sourceUrl || seconds === null || seconds < 0) return '';
+
+  const videoId = extractYouTubeVideoId_(sourceUrl);
+  if (videoId) {
+    return 'https://www.youtube.com/watch?v=' + videoId + '&t=' + seconds + 's';
+  }
+  return '';
 }
 
 function extractYouTubeVideoId_(value) {
