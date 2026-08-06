@@ -297,7 +297,7 @@ function setupDashboard_(ss) {
   sheet.setHiddenGridlines(true);
 
   // タイトル
-  sheet.getRange('A1:K1').merge()
+  sheet.getRange('A1:M1').merge()
     .setValue('ShidaTube 運営ダッシュボード')
     .setBackground('#C62828')
     .setFontColor('#FFFFFF')
@@ -306,7 +306,7 @@ function setupDashboard_(ss) {
     .setHorizontalAlignment('center');
 
   // KPI
-  sheet.getRange('A3:B3').setValues([['指標', '現在値']]);
+  sheet.getRange('A3:B3').setValues([['主要KPI', '現在値']]);
   styleHeaderRange_(sheet.getRange('A3:B3'), '#263238');
 
   const kpis = [
@@ -331,23 +331,41 @@ function setupDashboard_(ss) {
   sheet.getRange(4, 1, kpis.length, 2).setValues(kpis);
   sheet.getRange('B4:B13').setNumberFormat('#,##0');
   sheet.getRange('A4:B13').setBorder(true, true, true, true, true, true);
-  sheet.getRange('A4:A13').setFontWeight('bold');
+  sheet.getRange('A4:A13').setFontWeight('bold').setBackground('#F5F7F8');
+  sheet.getRange('B4:B13').setBackground('#FFFFFF').setHorizontalAlignment('right');
+  sheet.getRange('A3:B13').setVerticalAlignment('middle');
 
   // 次にやること
-  sheet.getRange('D3:H3').merge()
+  sheet.getRange('D3:M3').merge()
     .setValue('次にやること')
     .setBackground('#EF6C00')
     .setFontColor('#FFFFFF')
     .setFontWeight('bold')
     .setHorizontalAlignment('center');
 
-  sheet.getRange('D4:H8').setValues([
-    ['1', '投稿管理で「確認待ち」を確認', '', '', ''],
-    ['2', 'S評価の切り抜き候補から着手', '', '', ''],
-    ['3', '公開済みShortsの再生数を更新', '', '', ''],
-    ['4', '次週分の投稿予定日を入力', '', '', ''],
-    ['5', 'ネタ帳から次企画を選定', '', '', '']
-  ]).setBorder(true, true, true, true, true, true);
+  const nextActions = [
+    '投稿管理で「確認待ち」を確認',
+    'S評価の切り抜き候補から着手',
+    '公開済みShortsの再生数を更新',
+    '次週分の投稿予定日を入力',
+    'ネタ帳から次企画を選定'
+  ];
+  nextActions.forEach((action, index) => {
+    const row = 4 + index;
+    sheet.getRange(row, 4)
+      .setValue(index + 1)
+      .setBackground('#FFF3E0')
+      .setFontWeight('bold')
+      .setHorizontalAlignment('center');
+    sheet.getRange(row, 5, 1, 9).merge()
+      .setValue(action)
+      .setBackground('#FFFFFF')
+      .setWrap(true);
+    sheet.getRange(row, 4, 1, 10)
+      .setBorder(true, true, true, true, true, true)
+      .setVerticalAlignment('middle');
+    sheet.setRowHeight(row, 32);
+  });
 
   // 再生数 TOP10（サムネイル・YouTubeリンク付き）
   sheet.getRange('A14:F14').merge()
@@ -381,15 +399,16 @@ function setupDashboard_(ss) {
   writeDashboardTop10_(sheet, 'ライブ一覧', 29, 8);
 
   // カテゴリ別平均再生数
-  sheet.getRange('G14:J14').merge()
+  sheet.getRange('H14:M14').merge()
     .setValue('カテゴリ別平均再生数')
     .setBackground('#6A1B9A')
     .setFontColor('#FFFFFF')
     .setFontWeight('bold')
     .setHorizontalAlignment('center');
 
-  sheet.getRange('G15:H15').setValues([['カテゴリ', '平均再生数']]);
-  styleHeaderRange_(sheet.getRange('G15:H15'), '#263238');
+  sheet.getRange('H15:K15').merge().setValue('カテゴリ');
+  sheet.getRange('L15:M15').merge().setValue('平均再生数');
+  styleHeaderRange_(sheet.getRange('H15:M15'), '#263238');
 
   const cats = [
     ['Minecraft'],
@@ -399,15 +418,23 @@ function setupDashboard_(ss) {
     ['その他']
   ];
 
-  sheet.getRange('G16:G20').setValues(cats);
+  cats.forEach((category, index) => {
+    const row = 16 + index;
+    sheet.getRange(row, 8, 1, 4).merge().setValue(category[0]);
+    sheet.getRange(row, 12, 1, 2).merge();
+  });
 
   for (let row = 16; row <= 20; row++) {
-    sheet.getRange(row, 8).setFormula(
-      `=IFERROR(AVERAGEIF('Shorts一覧'!J:J,G${row},'Shorts一覧'!G:G),0)`
+    sheet.getRange(row, 12).setFormula(
+      `=IFERROR(AVERAGEIF('Shorts一覧'!J:J,H${row},'Shorts一覧'!G:G),0)`
     );
   }
 
-  sheet.getRange('H16:H20').setNumberFormat('#,##0');
+  sheet.getRange('L16:L20').setNumberFormat('#,##0').setHorizontalAlignment('right');
+  sheet.getRange('H16:M20')
+    .setBorder(true, true, true, true, true, true)
+    .setVerticalAlignment('middle');
+  sheet.getRange('H16:K20').setBackground('#F7F3FA').setFontWeight('bold');
 
   // 最近の傾向：直近90日以内に公開された動画を、公開後1日平均再生数で比較
   sheet.getRange('A41:I41').merge()
