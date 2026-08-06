@@ -175,19 +175,21 @@ function setupLiveSheet_(ss) {
 }
 
 function setupClipSheet_(ss) {
-  // 既存の14列は位置を変えず、連動・分析用の列を右側に追加する。
+  // 既存列は位置を変えず、連動・分析用の列を右側に追加する。
+  // AI順位と長さ（秒）も末尾へ追加し、入力済みデータの列ずれを防ぐ。
   const headers = [
     'No.', '登録日', '元配信', '配信URL', '開始時間', '終了時間',
     '内容・オチ', '種類', '優先度', '編集状況', '担当', '投稿予定日',
     '投稿済URL', 'メモ', '元配信動画ID', 'AI選定理由', '用途', '採用判定',
     '修正開始', '修正終了', 'タイトル案', '見どころ要素',
-    '公開後再生数', '公開後高評価数', '登録者獲得', '最終実績更新'
+    '公開後再生数', '公開後高評価数', '登録者獲得', '最終実績更新',
+    'AI順位', '長さ（秒）'
   ];
   const sheet = getOrCreateSheet_(ss, '切り抜き候補', headers);
   styleHeaderRange_(sheet.getRange(1, 1, 1, headers.length), '#6A1B9A');
   setWidths_(sheet, [
     60,110,280,260,90,90,360,120,90,110,110,120,260,260,
-    125,300,120,110,90,90,300,220,120,130,110,140
+    125,300,120,110,90,90,300,220,120,130,110,140,80,100
   ]);
   setValidation_(sheet, 8, ['爆笑', '神プレイ', '絶叫', '感動', '情報', 'その他']);
   setValidation_(sheet, 9, ['S', 'A', 'B', 'C']);
@@ -921,7 +923,7 @@ function addClipFromSelectedLive() {
   const live = active.getRange(rowNumber, 1, 1, 16).getValues()[0];
   const sheet = ss.getSheetByName('切り抜き候補');
   const row = Math.max(sheet.getLastRow() + 1, 2);
-  const values = new Array(26).fill('');
+  const values = new Array(28).fill('');
   values[0] = row - 1;
   values[1] = new Date();
   values[2] = live[2];
@@ -966,7 +968,7 @@ function refreshClipManagement_() {
   const performance = buildPublishedPerformanceMap_(ss);
   const clipLastRow = clipSheet.getLastRow();
   const clipRows = clipLastRow >= 2
-    ? clipSheet.getRange(2, 1, clipLastRow - 1, 26).getValues()
+    ? clipSheet.getRange(2, 1, clipLastRow - 1, 28).getValues()
     : [];
   const summary = {};
 
