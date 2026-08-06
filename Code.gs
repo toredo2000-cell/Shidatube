@@ -148,13 +148,23 @@ function setupNormalVideosSheet_(ss) {
 function setupLiveSheet_(ss) {
   const headers = [
     'No.', '配信日', 'タイトル', 'URL', '動画ID', '長さ（分）',
-    '再生回数', 'ゲーム・カテゴリ', 'コラボ相手', '切り抜き候補数',
+    '再生回数', '高評価数', 'ゲーム・カテゴリ', 'コラボ相手', '切り抜き候補数',
     '確認状況', 'メモ'
   ];
-  const sheet = getOrCreateSheet_(ss, 'ライブ一覧', headers);
+  let sheet = ss.getSheetByName('ライブ一覧');
+  if (!sheet) sheet = ss.insertSheet('ライブ一覧');
+
+  // 旧版には高評価数列がなかったため、既存の手入力列を壊さずに1列追加する。
+  const currentHeaders = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 12)).getValues()[0];
+  if (currentHeaders[6] === '再生回数' && currentHeaders[7] === 'ゲーム・カテゴリ') {
+    sheet.insertColumnAfter(7);
+  }
+
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  sheet.setFrozenRows(1);
   styleHeader_(sheet, '#1565C0');
-  setWidths_(sheet, [60,120,360,280,120,100,110,150,150,110,110,260]);
-  setValidation_(sheet, 11, ['未確認', '確認中', '確認済み', '要確認']);
+  setWidths_(sheet, [60,120,360,280,120,100,110,110,150,150,110,110,260]);
+  setValidation_(sheet, 12, ['未確認', '確認中', '確認済み', '要確認']);
   applyFilter_(sheet, headers.length);
 }
 
@@ -256,7 +266,7 @@ function setupDashboard_(ss) {
   sheet.setHiddenGridlines(true);
 
   // タイトル
-  sheet.getRange('A1:H1').merge()
+  sheet.getRange('A1:K1').merge()
     .setValue('ShidaTube 運営ダッシュボード')
     .setBackground('#C62828')
     .setFontColor('#FFFFFF')
@@ -309,64 +319,67 @@ function setupDashboard_(ss) {
   ]).setBorder(true, true, true, true, true, true);
 
   // Shorts再生数 TOP10
-  sheet.getRange('A14:C14').merge()
+  sheet.getRange('A14:E14').merge()
     .setValue('Shorts 再生数 TOP10')
     .setBackground('#1565C0')
     .setFontColor('#FFFFFF')
     .setFontWeight('bold')
     .setHorizontalAlignment('center');
 
-  sheet.getRange('A15:C15').setValues([['順位', 'タイトル', '再生回数']]);
-  styleHeaderRange_(sheet.getRange('A15:C15'), '#263238');
+  sheet.getRange('A15:E15').setValues([['順位', 'タイトル', '投稿日', '再生回数', '高評価数']]);
+  styleHeaderRange_(sheet.getRange('A15:E15'), '#263238');
 
   sheet.getRange('A16').setFormula('=SEQUENCE(10)');
   sheet.getRange('B16').setFormula(
-    '=IFERROR(ARRAY_CONSTRAIN(SORT(FILTER({\'Shorts一覧\'!C2:C,\'Shorts一覧\'!G2:G},\'Shorts一覧\'!C2:C<>""),2,FALSE),10,2),"")'
+    '=IFERROR(ARRAY_CONSTRAIN(SORT(FILTER({\'Shorts一覧\'!C2:C,\'Shorts一覧\'!B2:B,\'Shorts一覧\'!G2:G,\'Shorts一覧\'!H2:H},\'Shorts一覧\'!C2:C<>""),3,FALSE),10,4),"")'
   );
-  sheet.getRange('C16:C25').setNumberFormat('#,##0');
+  sheet.getRange('C16:C25').setNumberFormat('yyyy-mm-dd');
+  sheet.getRange('D16:E25').setNumberFormat('#,##0');
 
   // 通常動画 再生数 TOP10
-  sheet.getRange('A27:C27').merge()
+  sheet.getRange('A27:E27').merge()
     .setValue('通常動画 再生数 TOP10')
     .setBackground('#00838F')
     .setFontColor('#FFFFFF')
     .setFontWeight('bold')
     .setHorizontalAlignment('center');
 
-  sheet.getRange('A28:C28').setValues([['順位', 'タイトル', '再生回数']]);
-  styleHeaderRange_(sheet.getRange('A28:C28'), '#263238');
+  sheet.getRange('A28:E28').setValues([['順位', 'タイトル', '投稿日', '再生回数', '高評価数']]);
+  styleHeaderRange_(sheet.getRange('A28:E28'), '#263238');
   sheet.getRange('A29').setFormula('=SEQUENCE(10)');
   sheet.getRange('B29').setFormula(
-    '=IFERROR(ARRAY_CONSTRAIN(SORT(FILTER({\'通常動画一覧\'!C2:C,\'通常動画一覧\'!G2:G},\'通常動画一覧\'!C2:C<>""),2,FALSE),10,2),"")'
+    '=IFERROR(ARRAY_CONSTRAIN(SORT(FILTER({\'通常動画一覧\'!C2:C,\'通常動画一覧\'!B2:B,\'通常動画一覧\'!G2:G,\'通常動画一覧\'!H2:H},\'通常動画一覧\'!C2:C<>""),3,FALSE),10,4),"")'
   );
-  sheet.getRange('C29:C38').setNumberFormat('#,##0');
+  sheet.getRange('C29:C38').setNumberFormat('yyyy-mm-dd');
+  sheet.getRange('D29:E38').setNumberFormat('#,##0');
 
   // ライブ配信 再生数 TOP10
-  sheet.getRange('E27:G27').merge()
+  sheet.getRange('G27:K27').merge()
     .setValue('ライブ配信 再生数 TOP10')
     .setBackground('#1565C0')
     .setFontColor('#FFFFFF')
     .setFontWeight('bold')
     .setHorizontalAlignment('center');
 
-  sheet.getRange('E28:G28').setValues([['順位', 'タイトル', '再生回数']]);
-  styleHeaderRange_(sheet.getRange('E28:G28'), '#263238');
-  sheet.getRange('E29').setFormula('=SEQUENCE(10)');
-  sheet.getRange('F29').setFormula(
-    '=IFERROR(ARRAY_CONSTRAIN(SORT(FILTER({\'ライブ一覧\'!C2:C,\'ライブ一覧\'!G2:G},\'ライブ一覧\'!C2:C<>""),2,FALSE),10,2),"")'
+  sheet.getRange('G28:K28').setValues([['順位', 'タイトル', '投稿日', '再生回数', '高評価数']]);
+  styleHeaderRange_(sheet.getRange('G28:K28'), '#263238');
+  sheet.getRange('G29').setFormula('=SEQUENCE(10)');
+  sheet.getRange('H29').setFormula(
+    '=IFERROR(ARRAY_CONSTRAIN(SORT(FILTER({\'ライブ一覧\'!C2:C,\'ライブ一覧\'!B2:B,\'ライブ一覧\'!G2:G,\'ライブ一覧\'!H2:H},\'ライブ一覧\'!C2:C<>""),3,FALSE),10,4),"")'
   );
-  sheet.getRange('G29:G38').setNumberFormat('#,##0');
+  sheet.getRange('I29:I38').setNumberFormat('yyyy-mm-dd');
+  sheet.getRange('J29:K38').setNumberFormat('#,##0');
 
   // カテゴリ別平均再生数
-  sheet.getRange('E14:H14').merge()
+  sheet.getRange('G14:J14').merge()
     .setValue('カテゴリ別平均再生数')
     .setBackground('#6A1B9A')
     .setFontColor('#FFFFFF')
     .setFontWeight('bold')
     .setHorizontalAlignment('center');
 
-  sheet.getRange('E15:F15').setValues([['カテゴリ', '平均再生数']]);
-  styleHeaderRange_(sheet.getRange('E15:F15'), '#263238');
+  sheet.getRange('G15:H15').setValues([['カテゴリ', '平均再生数']]);
+  styleHeaderRange_(sheet.getRange('G15:H15'), '#263238');
 
   const cats = [
     ['Minecraft'],
@@ -376,17 +389,17 @@ function setupDashboard_(ss) {
     ['その他']
   ];
 
-  sheet.getRange('E16:E20').setValues(cats);
+  sheet.getRange('G16:G20').setValues(cats);
 
   for (let row = 16; row <= 20; row++) {
-    sheet.getRange(row, 6).setFormula(
-      `=IFERROR(AVERAGEIF('Shorts一覧'!J:J,E${row},'Shorts一覧'!G:G),0)`
+    sheet.getRange(row, 8).setFormula(
+      `=IFERROR(AVERAGEIF('Shorts一覧'!J:J,G${row},'Shorts一覧'!G:G),0)`
     );
   }
 
-  sheet.getRange('F16:F20').setNumberFormat('#,##0');
+  sheet.getRange('H16:H20').setNumberFormat('#,##0');
 
-  setWidths_(sheet, [180, 420, 120, 50, 180, 130, 120, 120]);
+  setWidths_(sheet, [70, 360, 105, 110, 100, 35, 70, 360, 105, 110, 100]);
   sheet.setFrozenRows(1);
 }
 
@@ -619,7 +632,7 @@ function updateLiveSheet_(streams) {
 
   setupLiveSheet_(ss);
 
-  const columnCount = 12;
+  const columnCount = 13;
   const lastRow = sheet.getLastRow();
   const existingValues = lastRow >= 2
     ? sheet.getRange(2, 1, lastRow - 1, columnCount).getValues()
@@ -654,11 +667,11 @@ function updateLiveSheet_(streams) {
     let memo = '';
 
     if (existing) {
-      category = existing.values[7] || category;
-      collaborator = existing.values[8] || '';
-      clipCount = Number(existing.values[9] || 0);
-      reviewStatus = existing.values[10] || '未確認';
-      memo = existing.values[11] || '';
+      category = existing.values[8] || category;
+      collaborator = existing.values[9] || '';
+      clipCount = Number(existing.values[10] || 0);
+      reviewStatus = existing.values[11] || '未確認';
+      memo = existing.values[12] || '';
     }
 
     const row = [
@@ -669,6 +682,7 @@ function updateLiveSheet_(streams) {
       videoId,
       Math.round(Number(stream.durationSeconds || 0) / 6) / 10,
       Number(stream.viewCount || 0),
+      Number(stream.likeCount || 0),
       category,
       collaborator,
       clipCount,
@@ -688,7 +702,7 @@ function updateLiveSheet_(streams) {
   Object.keys(rowsByVideoId).forEach(videoId => {
     if (!seen[videoId]) {
       const rowNumber = rowsByVideoId[videoId].rowNumber;
-      sheet.getRange(rowNumber, 11).setValue('要確認');
+      sheet.getRange(rowNumber, 12).setValue('要確認');
     }
   });
 
@@ -707,9 +721,9 @@ function updateLiveSheet_(streams) {
       .setNumberFormat('yyyy-mm-dd hh:mm');
     sheet.getRange(2, 6, updatedLastRow - 1, 1)
       .setNumberFormat('0.0');
-    sheet.getRange(2, 7, updatedLastRow - 1, 1)
+    sheet.getRange(2, 7, updatedLastRow - 1, 2)
       .setNumberFormat('#,##0');
-    sheet.getRange(2, 10, updatedLastRow - 1, 1)
+    sheet.getRange(2, 11, updatedLastRow - 1, 1)
       .setNumberFormat('0');
   }
 
@@ -814,4 +828,3 @@ function jsonResponse_(payload) {
     .createTextOutput(JSON.stringify(payload))
     .setMimeType(ContentService.MimeType.JSON);
 }
-
