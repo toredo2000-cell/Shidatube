@@ -1407,7 +1407,7 @@ function buildYouTubeTimestampUrl_(sourceUrl, seconds) {
 
   const videoId = extractYouTubeVideoId_(sourceUrl);
   if (videoId) {
-    return 'https://www.youtube.com/embed/' + videoId + '?start=' + seconds + '&autoplay=1';
+    return 'https://youtu.be/' + videoId + '?t=' + seconds + 's&autoplay=1';
   }
   return '';
 }
