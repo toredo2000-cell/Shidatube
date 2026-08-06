@@ -1305,7 +1305,11 @@ function refreshClipManagement_() {
     : [];
   const summary = {};
 
-  clipRows.forEach((row, index) => {
+  const refreshedAt = new Date();
+  const sourceIdValues = [];
+  const performanceValues = [];
+
+  clipRows.forEach(row => {
     let sourceId = String(row[14] || '').trim();
     const sourceUrl = String(row[3] || '').trim();
     const sourceTitle = String(row[2] || '').trim();
@@ -1315,16 +1319,14 @@ function refreshClipManagement_() {
     const publishedUrl = String(row[12] || '').trim();
     const publishedId = extractYouTubeVideoId_(publishedUrl);
     const stats = publishedId && performance[publishedId] ? performance[publishedId] : null;
-    const outputRow = index + 2;
 
-    clipSheet.getRange(outputRow, 15).setValue(sourceId);
-    clipSheet.getRange(outputRow, 23, 1, 4).setValues([[
+    sourceIdValues.push([sourceId]);
+    performanceValues.push([
       stats ? stats.views : '',
       stats ? stats.likes : '',
       stats ? stats.subscribers : '',
-      stats ? new Date() : ''
-    ]]);
-    if (stats) clipSheet.getRange(outputRow, 26).setNumberFormat('yyyy-mm-dd hh:mm');
+      stats ? refreshedAt : ''
+    ]);
 
     if (!sourceId) return;
     if (!summary[sourceId]) summary[sourceId] = { total: 0, shorts: 0, normal: 0, published: 0 };
@@ -1337,20 +1339,28 @@ function refreshClipManagement_() {
     }
   });
 
-  liveRows.forEach((row, index) => {
+  if (clipRows.length) {
+    clipSheet.getRange(2, 15, clipRows.length, 1).setValues(sourceIdValues);
+    clipSheet.getRange(2, 23, clipRows.length, 4).setValues(performanceValues);
+    clipSheet.getRange(2, 26, clipRows.length, 1).setNumberFormat('yyyy-mm-dd hh:mm');
+  }
+
+  const liveClipCounts = [];
+  const livePublishedCounts = [];
+  liveRows.forEach(row => {
     const videoId = String(row[4] || '');
     const counts = summary[videoId] || { total: 0, shorts: 0, normal: 0, published: 0 };
-    const outputRow = index + 2;
-    liveSheet.getRange(outputRow, 11).setValue(counts.total);
-    liveSheet.getRange(outputRow, 14, 1, 3).setValues([[
+    liveClipCounts.push([counts.total]);
+    livePublishedCounts.push([
       counts.shorts,
       counts.normal,
       counts.total > 0 ? counts.published / counts.total : 0
-    ]]);
+    ]);
   });
 
   if (liveRows.length) {
-    liveSheet.getRange(2, 11, liveRows.length, 1).setNumberFormat('0');
+    liveSheet.getRange(2, 11, liveRows.length, 1).setValues(liveClipCounts).setNumberFormat('0');
+    liveSheet.getRange(2, 14, liveRows.length, 3).setValues(livePublishedCounts);
     liveSheet.getRange(2, 14, liveRows.length, 2).setNumberFormat('0');
     liveSheet.getRange(2, 16, liveRows.length, 1).setNumberFormat('0.0%');
   }
@@ -1397,21 +1407,18 @@ function applyClipStartTimeLinks_(sheet, startRow, numRows) {
 
   // D列の配信URLが空の行は、O列の元配信動画IDを使ってリンクを作る。
   const sourceValues = sheet.getRange(firstRow, 4, rowCount, 12).getDisplayValues();
-  sourceValues.forEach((row, index) => {
+  const richTextValues = sourceValues.map(row => {
     const sourceUrl = String(row[0] || '').trim();
     const timeText = String(row[1] || '').trim();
     const sourceVideoId = String(row[11] || '').trim();
     const source = sourceUrl || sourceVideoId;
     const seconds = clipTimeToSeconds_(timeText);
     const timestampUrl = buildYouTubeTimestampUrl_(source, seconds);
-    if (!timeText || !timestampUrl) return;
-
-    const richText = SpreadsheetApp.newRichTextValue()
-      .setText(timeText)
-      .setLinkUrl(timestampUrl)
-      .build();
-    sheet.getRange(firstRow + index, 5).setRichTextValue(richText);
+    const builder = SpreadsheetApp.newRichTextValue().setText(timeText);
+    if (timeText && timestampUrl) builder.setLinkUrl(timestampUrl);
+    return [builder.build()];
   });
+  sheet.getRange(firstRow, 5, rowCount, 1).setRichTextValues(richTextValues);
 }
 
 function clipTimeToSeconds_(value) {
