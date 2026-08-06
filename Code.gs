@@ -1325,6 +1325,9 @@ function refreshClipManagement_() {
     liveSheet.getRange(2, 14, liveRows.length, 2).setNumberFormat('0');
     liveSheet.getRange(2, 16, liveRows.length, 1).setNumberFormat('0.0%');
   }
+  // 元配信動画IDの補完後、既存候補の開始時間リンクを全行更新する。
+  applyClipStartTimeLinks_(clipSheet, 2, clipRows.length);
+
   return { clipCount: clipRows.length, liveCount: liveRows.length };
 }
 
@@ -1363,12 +1366,15 @@ function applyClipStartTimeLinks_(sheet, startRow, numRows) {
   const rowCount = Math.min(Number(numRows) || availableRows, availableRows);
   if (rowCount <= 0) return;
 
-  const sourceValues = sheet.getRange(firstRow, 4, rowCount, 2).getDisplayValues();
+  // D列の配信URLが空の行は、O列の元配信動画IDを使ってリンクを作る。
+  const sourceValues = sheet.getRange(firstRow, 4, rowCount, 12).getDisplayValues();
   sourceValues.forEach((row, index) => {
     const sourceUrl = String(row[0] || '').trim();
     const timeText = String(row[1] || '').trim();
+    const sourceVideoId = String(row[11] || '').trim();
+    const source = sourceUrl || sourceVideoId;
     const seconds = clipTimeToSeconds_(timeText);
-    const timestampUrl = buildYouTubeTimestampUrl_(sourceUrl, seconds);
+    const timestampUrl = buildYouTubeTimestampUrl_(source, seconds);
     if (!timeText || !timestampUrl) return;
 
     const richText = SpreadsheetApp.newRichTextValue()
