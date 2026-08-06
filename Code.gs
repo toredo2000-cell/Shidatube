@@ -1,0 +1,817 @@
+const SETUP_TOKEN_PROPERTY = 'SHIDATUBE_SETUP_TOKEN';
+const SHEET_NAME = 'Shorts一覧';
+
+const HEADERS = [
+  'No.',
+  '公開日時',
+  'タイトル',
+  'URL',
+  '動画ID',
+  '長さ（秒）',
+  '再生回数',
+  '高評価数',
+  'コメント数',
+  'カテゴリ',
+  'ステータス',
+  '元配信',
+  '評価',
+  'メモ',
+  '最終更新'
+];
+
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('ShidaTube管理')
+    .addItem('運営シートを初期設定', 'setupDailyOperations')
+    .addItem('認証トークンを設定', 'setSetupToken')
+    .addItem('ダッシュボードを更新', 'refreshDashboard')
+    .addSeparator()
+    .addItem('投稿管理に新しい行を追加', 'addPostingRow')
+    .addItem('切り抜き候補に新しい行を追加', 'addClipRow')
+    .addToUi();
+}
+
+function setupDailyOperations() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  setupShortsSheet_(ss);
+  setupNormalVideosSheet_(ss);
+  setupLiveSheet_(ss);
+  setupClipSheet_(ss);
+  setupPostingSheet_(ss);
+  setupIdeaSheet_(ss);
+  setupMasterSheet_(ss);
+  setupDashboard_(ss);
+
+  ss.setActiveSheet(ss.getSheetByName('Dashboard'));
+  SpreadsheetApp.getUi().alert('ShidaTube運営管理シートの初期設定が完了しました。');
+}
+
+function setSetupToken() {
+  const ui = SpreadsheetApp.getUi();
+  const response = ui.prompt(
+    '認証トークンを設定',
+    '外部の取得スクリプトと共通で使用する、推測されにくい文字列を入力してください。',
+    ui.ButtonSet.OK_CANCEL
+  );
+
+  if (response.getSelectedButton() !== ui.Button.OK) return;
+
+  const token = response.getResponseText().trim();
+  if (!token) {
+    ui.alert('トークンが空のため、設定を中止しました。');
+    return;
+  }
+
+  PropertiesService.getScriptProperties().setProperty(SETUP_TOKEN_PROPERTY, token);
+  ui.alert('認証トークンを保存しました。コードやシート上には表示されません。');
+}
+
+function getSetupToken_() {
+  return PropertiesService.getScriptProperties().getProperty(SETUP_TOKEN_PROPERTY) || '';
+}
+
+function doGet() {
+  return jsonResponse_({
+    ok: true,
+    service: 'ShidaTube Shorts Sheet Receiver'
+  });
+}
+
+function doPost(e) {
+  try {
+    const payload = JSON.parse(e.postData.contents || '{}');
+
+    const setupToken = getSetupToken_();
+    if (!setupToken || !payload.token || payload.token !== setupToken) {
+      return jsonResponse_({
+        ok: false,
+        error: 'Unauthorized'
+      });
+    }
+
+    const videos = Array.isArray(payload.videos) ? payload.videos : [];
+    const normalVideos = Array.isArray(payload.normalVideos) ? payload.normalVideos : [];
+    const streams = Array.isArray(payload.streams) ? payload.streams : [];
+
+    const shortsResult = updateShortsSheet_(videos);
+    const normalResult = updateNormalVideosSheet_(normalVideos);
+    const streamResult = updateLiveSheet_(streams);
+    refreshDashboard();
+
+    return jsonResponse_({
+      ok: true,
+      videoCount: videos.length,
+      addedCount: shortsResult.addedCount,
+      updatedCount: shortsResult.updatedCount,
+      normalVideoCount: normalVideos.length,
+      normalAddedCount: normalResult.addedCount,
+      normalUpdatedCount: normalResult.updatedCount,
+      streamCount: streams.length,
+      streamAddedCount: streamResult.addedCount,
+      streamUpdatedCount: streamResult.updatedCount
+    });
+  } catch (error) {
+    return jsonResponse_({
+      ok: false,
+      error: String(error && error.message ? error.message : error)
+    });
+  }
+}
+
+function setupShortsSheet_(ss) {
+  let sheet = ss.getSheetByName(SHEET_NAME);
+  if (!sheet) sheet = ss.insertSheet(SHEET_NAME);
+
+  prepareSheet_(sheet);
+  formatSheet_(sheet);
+  applyShortsValidations_(sheet);
+}
+
+function setupNormalVideosSheet_(ss) {
+  const headers = [
+    'No.', '公開日時', 'タイトル', 'URL', '動画ID', '長さ（分）',
+    '再生回数', '高評価数', 'コメント数', 'カテゴリ', 'ステータス',
+    'シリーズ・企画', 'サムネ確認', '評価', 'メモ', '最終更新'
+  ];
+
+  const sheet = getOrCreateSheet_(ss, '通常動画一覧', headers);
+  styleHeader_(sheet, '#00838F');
+  setWidths_(sheet, [60,140,360,280,120,100,110,110,110,140,100,180,110,70,260,140]);
+  setValidation_(sheet, 10, ['Minecraft', '龍が如く', 'AEW・プロレス', '雑談', 'コラボ', 'その他']);
+  setValidation_(sheet, 11, ['公開中', '非公開', '要確認', 'リメイク候補']);
+  setValidation_(sheet, 13, ['未確認', '確認済み']);
+  setValidation_(sheet, 14, ['S', 'A', 'B', 'C']);
+  applyFilter_(sheet, headers.length);
+}
+
+function setupLiveSheet_(ss) {
+  const headers = [
+    'No.', '配信日', 'タイトル', 'URL', '動画ID', '長さ（分）',
+    '再生回数', 'ゲーム・カテゴリ', 'コラボ相手', '切り抜き候補数',
+    '確認状況', 'メモ'
+  ];
+  const sheet = getOrCreateSheet_(ss, 'ライブ一覧', headers);
+  styleHeader_(sheet, '#1565C0');
+  setWidths_(sheet, [60,120,360,280,120,100,110,150,150,110,110,260]);
+  setValidation_(sheet, 11, ['未確認', '確認中', '確認済み', '要確認']);
+  applyFilter_(sheet, headers.length);
+}
+
+function setupClipSheet_(ss) {
+  const headers = [
+    'No.', '登録日', '元配信', '配信URL', '開始時間', '終了時間',
+    '内容・オチ', '種類', '優先度', '編集状況', '担当', '投稿予定日',
+    '投稿済URL', 'メモ'
+  ];
+  const sheet = getOrCreateSheet_(ss, '切り抜き候補', headers);
+  styleHeader_(sheet, '#6A1B9A');
+  setWidths_(sheet, [60,110,280,260,90,90,360,120,90,110,110,120,260,260]);
+  setValidation_(sheet, 8, ['爆笑', '神プレイ', '絶叫', '感動', '情報', 'その他']);
+  setValidation_(sheet, 9, ['S', 'A', 'B', 'C']);
+  setValidation_(sheet, 10, ['未着手', '編集中', '確認待ち', '完成', '保留']);
+  applyFilter_(sheet, headers.length);
+}
+
+function setupPostingSheet_(ss) {
+  const headers = [
+    'No.', '種別', 'ステータス', '投稿予定日', '投稿時間', '日本語タイトル',
+    '英語タイトル', '元配信・素材', '担当', 'サムネ・タイトル画像',
+    '説明文確認', '公開URL', '公開日', '初動24時間再生', '7日再生',
+    '評価', 'メモ'
+  ];
+  const sheet = getOrCreateSheet_(ss, '投稿管理', headers);
+  styleHeader_(sheet, '#EF6C00');
+  setWidths_(sheet, [60,90,110,120,90,320,320,260,110,220,110,260,120,120,110,80,260]);
+  setValidation_(sheet, 2, ['Shorts', '通常動画', 'ライブ', '告知']);
+  setValidation_(sheet, 3, ['企画中', '素材待ち', '編集中', '確認待ち', '予約済み', '公開済み', '保留']);
+  setValidation_(sheet, 11, ['未確認', '確認済み']);
+  setValidation_(sheet, 16, ['S', 'A', 'B', 'C']);
+  applyFilter_(sheet, headers.length);
+
+  const rules = sheet.getConditionalFormatRules();
+  rules.push(
+    SpreadsheetApp.newConditionalFormatRule()
+      .whenTextEqualTo('公開済み')
+      .setBackground('#C8E6C9')
+      .setRanges([sheet.getRange('C2:C1000')])
+      .build(),
+    SpreadsheetApp.newConditionalFormatRule()
+      .whenTextEqualTo('確認待ち')
+      .setBackground('#FFF9C4')
+      .setRanges([sheet.getRange('C2:C1000')])
+      .build(),
+    SpreadsheetApp.newConditionalFormatRule()
+      .whenTextEqualTo('保留')
+      .setBackground('#EEEEEE')
+      .setRanges([sheet.getRange('C2:C1000')])
+      .build()
+  );
+  sheet.setConditionalFormatRules(rules);
+}
+
+function setupIdeaSheet_(ss) {
+  const headers = [
+    'No.', '登録日', '企画・ネタ', 'カテゴリ', '形式', '優先度',
+    '参考URL', '採用状況', 'メモ'
+  ];
+  const sheet = getOrCreateSheet_(ss, 'ネタ帳', headers);
+  styleHeader_(sheet, '#2E7D32');
+  setWidths_(sheet, [60,110,360,150,110,90,280,110,300]);
+  setValidation_(sheet, 4, ['Minecraft', '龍が如く', 'AEW・プロレス', '雑談', 'コラボ', 'その他']);
+  setValidation_(sheet, 5, ['Shorts', '通常動画', 'ライブ', '告知']);
+  setValidation_(sheet, 6, ['S', 'A', 'B', 'C']);
+  setValidation_(sheet, 8, ['未検討', '検討中', '採用', '見送り']);
+  applyFilter_(sheet, headers.length);
+}
+
+function setupMasterSheet_(ss) {
+  const sheet = getOrCreateSheet_(ss, 'マスタ', ['項目', '値']);
+  styleHeader_(sheet, '#455A64');
+  setWidths_(sheet, [180,300]);
+
+  if (sheet.getLastRow() < 2) {
+    const values = [
+      ['チャンネル', 'ShidaHikaru'],
+      ['Shorts URL', 'https://www.youtube.com/@ShidaHikaru/shorts'],
+      ['管理開始日', new Date()],
+      ['運用メモ', '自動取得列は直接変更せず、手入力列を使用してください。']
+    ];
+    sheet.getRange(2, 1, values.length, 2).setValues(values);
+    sheet.getRange('B4').setNumberFormat('yyyy-mm-dd');
+  }
+}
+
+function setupDashboard_(ss) {
+  let sheet = ss.getSheetByName('Dashboard');
+  if (!sheet) sheet = ss.insertSheet('Dashboard', 0);
+
+  // 既存の結合状態をすべて解除してから作り直す
+  sheet
+    .getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns())
+    .breakApart();
+
+  sheet.clear();
+  sheet.getCharts().forEach(chart => sheet.removeChart(chart));
+  sheet.setHiddenGridlines(true);
+
+  // タイトル
+  sheet.getRange('A1:H1').merge()
+    .setValue('ShidaTube 運営ダッシュボード')
+    .setBackground('#C62828')
+    .setFontColor('#FFFFFF')
+    .setFontWeight('bold')
+    .setFontSize(20)
+    .setHorizontalAlignment('center');
+
+  // KPI
+  sheet.getRange('A3:B3').setValues([['指標', '現在値']]);
+  styleHeaderRange_(sheet.getRange('A3:B3'), '#263238');
+
+  const kpis = [
+    ['公開Shorts本数', '=COUNTA(\'Shorts一覧\'!E2:E)'],
+    ['Shorts総再生数', '=SUM(\'Shorts一覧\'!G2:G)'],
+    ['Shorts平均再生数', '=IFERROR(AVERAGE(\'Shorts一覧\'!G2:G),0)'],
+    ['通常動画本数', '=COUNTA(\'通常動画一覧\'!E2:E)'],
+    ['通常動画総再生数', '=SUM(\'通常動画一覧\'!G2:G)'],
+    ['ライブ配信本数', '=COUNTA(\'ライブ一覧\'!E2:E)'],
+    [
+      '今月のShorts投稿数',
+      '=COUNTIFS(\'Shorts一覧\'!B2:B,">="&EOMONTH(TODAY(),-1)+1,\'Shorts一覧\'!B2:B,"<"&EOMONTH(TODAY(),0)+1)'
+    ],
+    [
+      '投稿予定（未公開）',
+      '=COUNTIFS(\'投稿管理\'!C2:C,"<>公開済み",\'投稿管理\'!F2:F,"<>")'
+    ],
+    ['編集中の切り抜き', '=COUNTIF(\'切り抜き候補\'!J2:J,"編集中")'],
+    ['S評価の切り抜き候補', '=COUNTIF(\'切り抜き候補\'!I2:I,"S")']
+  ];
+
+  sheet.getRange(4, 1, kpis.length, 2).setValues(kpis);
+  sheet.getRange('B4:B13').setNumberFormat('#,##0');
+  sheet.getRange('A4:B13').setBorder(true, true, true, true, true, true);
+  sheet.getRange('A4:A13').setFontWeight('bold');
+
+  // 次にやること
+  sheet.getRange('D3:H3').merge()
+    .setValue('次にやること')
+    .setBackground('#EF6C00')
+    .setFontColor('#FFFFFF')
+    .setFontWeight('bold')
+    .setHorizontalAlignment('center');
+
+  sheet.getRange('D4:H8').setValues([
+    ['1', '投稿管理で「確認待ち」を確認', '', '', ''],
+    ['2', 'S評価の切り抜き候補から着手', '', '', ''],
+    ['3', '公開済みShortsの再生数を更新', '', '', ''],
+    ['4', '次週分の投稿予定日を入力', '', '', ''],
+    ['5', 'ネタ帳から次企画を選定', '', '', '']
+  ]).setBorder(true, true, true, true, true, true);
+
+  // Shorts再生数 TOP10
+  sheet.getRange('A14:C14').merge()
+    .setValue('Shorts 再生数 TOP10')
+    .setBackground('#1565C0')
+    .setFontColor('#FFFFFF')
+    .setFontWeight('bold')
+    .setHorizontalAlignment('center');
+
+  sheet.getRange('A15:C15').setValues([['順位', 'タイトル', '再生回数']]);
+  styleHeaderRange_(sheet.getRange('A15:C15'), '#263238');
+
+  sheet.getRange('A16').setFormula('=SEQUENCE(10)');
+  sheet.getRange('B16').setFormula(
+    '=IFERROR(ARRAY_CONSTRAIN(SORT(FILTER({\'Shorts一覧\'!C2:C,\'Shorts一覧\'!G2:G},\'Shorts一覧\'!C2:C<>""),2,FALSE),10,2),"")'
+  );
+  sheet.getRange('C16:C25').setNumberFormat('#,##0');
+
+  // 通常動画 再生数 TOP10
+  sheet.getRange('A27:C27').merge()
+    .setValue('通常動画 再生数 TOP10')
+    .setBackground('#00838F')
+    .setFontColor('#FFFFFF')
+    .setFontWeight('bold')
+    .setHorizontalAlignment('center');
+
+  sheet.getRange('A28:C28').setValues([['順位', 'タイトル', '再生回数']]);
+  styleHeaderRange_(sheet.getRange('A28:C28'), '#263238');
+  sheet.getRange('A29').setFormula('=SEQUENCE(10)');
+  sheet.getRange('B29').setFormula(
+    '=IFERROR(ARRAY_CONSTRAIN(SORT(FILTER({\'通常動画一覧\'!C2:C,\'通常動画一覧\'!G2:G},\'通常動画一覧\'!C2:C<>""),2,FALSE),10,2),"")'
+  );
+  sheet.getRange('C29:C38').setNumberFormat('#,##0');
+
+  // ライブ配信 再生数 TOP10
+  sheet.getRange('E27:G27').merge()
+    .setValue('ライブ配信 再生数 TOP10')
+    .setBackground('#1565C0')
+    .setFontColor('#FFFFFF')
+    .setFontWeight('bold')
+    .setHorizontalAlignment('center');
+
+  sheet.getRange('E28:G28').setValues([['順位', 'タイトル', '再生回数']]);
+  styleHeaderRange_(sheet.getRange('E28:G28'), '#263238');
+  sheet.getRange('E29').setFormula('=SEQUENCE(10)');
+  sheet.getRange('F29').setFormula(
+    '=IFERROR(ARRAY_CONSTRAIN(SORT(FILTER({\'ライブ一覧\'!C2:C,\'ライブ一覧\'!G2:G},\'ライブ一覧\'!C2:C<>""),2,FALSE),10,2),"")'
+  );
+  sheet.getRange('G29:G38').setNumberFormat('#,##0');
+
+  // カテゴリ別平均再生数
+  sheet.getRange('E14:H14').merge()
+    .setValue('カテゴリ別平均再生数')
+    .setBackground('#6A1B9A')
+    .setFontColor('#FFFFFF')
+    .setFontWeight('bold')
+    .setHorizontalAlignment('center');
+
+  sheet.getRange('E15:F15').setValues([['カテゴリ', '平均再生数']]);
+  styleHeaderRange_(sheet.getRange('E15:F15'), '#263238');
+
+  const cats = [
+    ['Minecraft'],
+    ['龍が如く'],
+    ['AEW・プロレス'],
+    ['雑談'],
+    ['その他']
+  ];
+
+  sheet.getRange('E16:E20').setValues(cats);
+
+  for (let row = 16; row <= 20; row++) {
+    sheet.getRange(row, 6).setFormula(
+      `=IFERROR(AVERAGEIF('Shorts一覧'!J:J,E${row},'Shorts一覧'!G:G),0)`
+    );
+  }
+
+  sheet.getRange('F16:F20').setNumberFormat('#,##0');
+
+  setWidths_(sheet, [180, 420, 120, 50, 180, 130, 120, 120]);
+  sheet.setFrozenRows(1);
+}
+
+function refreshDashboard() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  setupDashboard_(ss);
+}
+
+function addPostingRow() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('投稿管理');
+  const row = Math.max(sheet.getLastRow() + 1, 2);
+  sheet.getRange(row, 1).setValue(row - 1);
+  sheet.getRange(row, 3).setValue('企画中');
+  sheet.getRange(row, 4).setValue(new Date());
+  sheet.getRange(row, 4).setNumberFormat('yyyy-mm-dd');
+  sheet.activate();
+  sheet.setActiveRange(sheet.getRange(row, 6));
+}
+
+function addClipRow() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('切り抜き候補');
+  const row = Math.max(sheet.getLastRow() + 1, 2);
+  sheet.getRange(row, 1).setValue(row - 1);
+  sheet.getRange(row, 2).setValue(new Date()).setNumberFormat('yyyy-mm-dd');
+  sheet.getRange(row, 9).setValue('A');
+  sheet.getRange(row, 10).setValue('未着手');
+  sheet.activate();
+  sheet.setActiveRange(sheet.getRange(row, 3));
+}
+
+function updateShortsSheet_(videos) {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = spreadsheet.getSheetByName(SHEET_NAME);
+
+  if (!sheet) sheet = spreadsheet.insertSheet(SHEET_NAME);
+
+  prepareSheet_(sheet);
+
+  const lastRow = sheet.getLastRow();
+  const existingValues = lastRow >= 2
+    ? sheet.getRange(2, 1, lastRow - 1, HEADERS.length).getValues()
+    : [];
+
+  const rowsByVideoId = {};
+  existingValues.forEach((row, index) => {
+    const videoId = String(row[4] || '');
+    if (videoId) {
+      rowsByVideoId[videoId] = {
+        rowNumber: index + 2,
+        values: row
+      };
+    }
+  });
+
+  let addedCount = 0;
+  let updatedCount = 0;
+  const seenVideoIds = {};
+  const now = new Date();
+
+  videos.forEach(video => {
+    const videoId = String(video.videoId || '');
+    if (!videoId) return;
+
+    seenVideoIds[videoId] = true;
+    const existing = rowsByVideoId[videoId];
+
+    let category = video.suggestedCategory || 'その他';
+    let status = '公開中';
+    let sourceLive = '';
+    let rating = '';
+    let memo = '';
+
+    if (existing) {
+      category = existing.values[9] || category;
+      status = existing.values[10] || status;
+      sourceLive = existing.values[11] || '';
+      rating = existing.values[12] || '';
+      memo = existing.values[13] || '';
+    }
+
+    const rowValues = [
+      '',
+      parseYouTubeDate_(video.publishedAt),
+      video.title || '',
+      video.url || '',
+      videoId,
+      Number(video.durationSeconds || 0),
+      Number(video.viewCount || 0),
+      Number(video.likeCount || 0),
+      Number(video.commentCount || 0),
+      category,
+      status,
+      sourceLive,
+      rating,
+      memo,
+      now
+    ];
+
+    if (existing) {
+      sheet.getRange(existing.rowNumber, 1, 1, HEADERS.length).setValues([rowValues]);
+      updatedCount++;
+    } else {
+      sheet.appendRow(rowValues);
+      addedCount++;
+    }
+  });
+
+  Object.keys(rowsByVideoId).forEach(videoId => {
+    if (!seenVideoIds[videoId]) {
+      const rowNumber = rowsByVideoId[videoId].rowNumber;
+      sheet.getRange(rowNumber, 11).setValue('要確認');
+      sheet.getRange(rowNumber, 15).setValue(now);
+    }
+  });
+
+  sortAndNumber_(sheet);
+  formatSheet_(sheet);
+  applyShortsValidations_(sheet);
+
+  return { addedCount, updatedCount };
+}
+
+
+function updateNormalVideosSheet_(videos) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('通常動画一覧') || ss.insertSheet('通常動画一覧');
+
+  setupNormalVideosSheet_(ss);
+
+  const columnCount = 16;
+  const lastRow = sheet.getLastRow();
+  const existingValues = lastRow >= 2
+    ? sheet.getRange(2, 1, lastRow - 1, columnCount).getValues()
+    : [];
+
+  const rowsByVideoId = {};
+  existingValues.forEach((row, index) => {
+    const videoId = String(row[4] || '');
+    if (videoId) {
+      rowsByVideoId[videoId] = { rowNumber: index + 2, values: row };
+    }
+  });
+
+  let addedCount = 0;
+  let updatedCount = 0;
+  const seen = {};
+  const now = new Date();
+
+  videos.forEach(video => {
+    const videoId = String(video.videoId || '');
+    if (!videoId) return;
+
+    seen[videoId] = true;
+    const existing = rowsByVideoId[videoId];
+
+    let category = video.suggestedCategory || 'その他';
+    let status = '公開中';
+    let series = '';
+    let thumbnailCheck = '未確認';
+    let rating = '';
+    let memo = '';
+
+    if (existing) {
+      category = existing.values[9] || category;
+      status = existing.values[10] || status;
+      series = existing.values[11] || '';
+      thumbnailCheck = existing.values[12] || '未確認';
+      rating = existing.values[13] || '';
+      memo = existing.values[14] || '';
+    }
+
+    const row = [
+      '',
+      parseYouTubeDate_(video.publishedAt),
+      video.title || '',
+      video.url || '',
+      videoId,
+      Math.round(Number(video.durationSeconds || 0) / 6) / 10,
+      Number(video.viewCount || 0),
+      Number(video.likeCount || 0),
+      Number(video.commentCount || 0),
+      category,
+      status,
+      series,
+      thumbnailCheck,
+      rating,
+      memo,
+      now
+    ];
+
+    if (existing) {
+      sheet.getRange(existing.rowNumber, 1, 1, columnCount).setValues([row]);
+      updatedCount++;
+    } else {
+      sheet.appendRow(row);
+      addedCount++;
+    }
+  });
+
+  Object.keys(rowsByVideoId).forEach(videoId => {
+    if (!seen[videoId]) {
+      const rowNumber = rowsByVideoId[videoId].rowNumber;
+      sheet.getRange(rowNumber, 11).setValue('要確認');
+      sheet.getRange(rowNumber, 16).setValue(now);
+    }
+  });
+
+  const updatedLastRow = sheet.getLastRow();
+  if (updatedLastRow >= 2) {
+    sheet.getRange(2, 1, updatedLastRow - 1, columnCount)
+      .sort([{ column: 2, ascending: false }]);
+
+    const numbers = [];
+    for (let i = 1; i <= updatedLastRow - 1; i++) numbers.push([i]);
+    sheet.getRange(2, 1, numbers.length, 1).setValues(numbers);
+
+    sheet.getRange(2, 2, updatedLastRow - 1, 1).setNumberFormat('yyyy-mm-dd hh:mm');
+    sheet.getRange(2, 6, updatedLastRow - 1, 1).setNumberFormat('0.0');
+    sheet.getRange(2, 7, updatedLastRow - 1, 3).setNumberFormat('#,##0');
+    sheet.getRange(2, 16, updatedLastRow - 1, 1).setNumberFormat('yyyy-mm-dd hh:mm');
+  }
+
+  return { addedCount, updatedCount };
+}
+
+
+function updateLiveSheet_(streams) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('ライブ一覧') || ss.insertSheet('ライブ一覧');
+
+  setupLiveSheet_(ss);
+
+  const columnCount = 12;
+  const lastRow = sheet.getLastRow();
+  const existingValues = lastRow >= 2
+    ? sheet.getRange(2, 1, lastRow - 1, columnCount).getValues()
+    : [];
+
+  const rowsByVideoId = {};
+  existingValues.forEach((row, index) => {
+    const videoId = String(row[4] || '');
+    if (videoId) {
+      rowsByVideoId[videoId] = {
+        rowNumber: index + 2,
+        values: row
+      };
+    }
+  });
+
+  let addedCount = 0;
+  let updatedCount = 0;
+  const seen = {};
+
+  streams.forEach(stream => {
+    const videoId = String(stream.videoId || '');
+    if (!videoId) return;
+
+    seen[videoId] = true;
+    const existing = rowsByVideoId[videoId];
+
+    let category = stream.suggestedCategory || 'その他';
+    let collaborator = '';
+    let clipCount = 0;
+    let reviewStatus = '未確認';
+    let memo = '';
+
+    if (existing) {
+      category = existing.values[7] || category;
+      collaborator = existing.values[8] || '';
+      clipCount = Number(existing.values[9] || 0);
+      reviewStatus = existing.values[10] || '未確認';
+      memo = existing.values[11] || '';
+    }
+
+    const row = [
+      '',
+      parseYouTubeDate_(stream.publishedAt),
+      stream.title || '',
+      stream.url || '',
+      videoId,
+      Math.round(Number(stream.durationSeconds || 0) / 6) / 10,
+      Number(stream.viewCount || 0),
+      category,
+      collaborator,
+      clipCount,
+      reviewStatus,
+      memo
+    ];
+
+    if (existing) {
+      sheet.getRange(existing.rowNumber, 1, 1, columnCount).setValues([row]);
+      updatedCount++;
+    } else {
+      sheet.appendRow(row);
+      addedCount++;
+    }
+  });
+
+  Object.keys(rowsByVideoId).forEach(videoId => {
+    if (!seen[videoId]) {
+      const rowNumber = rowsByVideoId[videoId].rowNumber;
+      sheet.getRange(rowNumber, 11).setValue('要確認');
+    }
+  });
+
+  const updatedLastRow = sheet.getLastRow();
+  if (updatedLastRow >= 2) {
+    sheet.getRange(2, 1, updatedLastRow - 1, columnCount)
+      .sort([{ column: 2, ascending: false }]);
+
+    const numbers = [];
+    for (let i = 1; i <= updatedLastRow - 1; i++) {
+      numbers.push([i]);
+    }
+    sheet.getRange(2, 1, numbers.length, 1).setValues(numbers);
+
+    sheet.getRange(2, 2, updatedLastRow - 1, 1)
+      .setNumberFormat('yyyy-mm-dd hh:mm');
+    sheet.getRange(2, 6, updatedLastRow - 1, 1)
+      .setNumberFormat('0.0');
+    sheet.getRange(2, 7, updatedLastRow - 1, 1)
+      .setNumberFormat('#,##0');
+    sheet.getRange(2, 10, updatedLastRow - 1, 1)
+      .setNumberFormat('0');
+  }
+
+  return { addedCount, updatedCount };
+}
+
+function getOrCreateSheet_(ss, name, headers) {
+  let sheet = ss.getSheetByName(name);
+  if (!sheet) sheet = ss.insertSheet(name);
+
+  const current = sheet.getRange(1, 1, 1, headers.length).getValues()[0];
+  const needsHeader = headers.some((header, index) => current[index] !== header);
+  if (needsHeader) sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+
+  sheet.setFrozenRows(1);
+  return sheet;
+}
+
+function styleHeader_(sheet, color) {
+  const columns = sheet.getLastColumn();
+  styleHeaderRange_(sheet.getRange(1, 1, 1, columns), color);
+}
+
+function styleHeaderRange_(range, color) {
+  range
+    .setBackground(color)
+    .setFontColor('#FFFFFF')
+    .setFontWeight('bold')
+    .setHorizontalAlignment('center')
+    .setVerticalAlignment('middle')
+    .setWrap(true);
+}
+
+function setWidths_(sheet, widths) {
+  widths.forEach((width, index) => sheet.setColumnWidth(index + 1, width));
+}
+
+function setValidation_(sheet, column, values) {
+  const rule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(values, true)
+    .setAllowInvalid(true)
+    .build();
+  sheet.getRange(2, column, 1000, 1).setDataValidation(rule);
+}
+
+function applyFilter_(sheet, columnCount) {
+  if (!sheet.getFilter()) {
+    sheet.getRange(1, 1, Math.max(sheet.getLastRow(), 2), columnCount).createFilter();
+  }
+}
+
+function prepareSheet_(sheet) {
+  const currentHeaders = sheet.getRange(1, 1, 1, HEADERS.length).getValues()[0];
+  const needsHeaders = HEADERS.some((header, index) => currentHeaders[index] !== header);
+  if (needsHeaders) sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
+  sheet.setFrozenRows(1);
+}
+
+function sortAndNumber_(sheet) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+
+  sheet.getRange(2, 1, lastRow - 1, HEADERS.length)
+    .sort([{ column: 2, ascending: false }]);
+
+  const numbers = [];
+  for (let index = 1; index <= lastRow - 1; index++) numbers.push([index]);
+  sheet.getRange(2, 1, numbers.length, 1).setValues(numbers);
+}
+
+function formatSheet_(sheet) {
+  const lastRow = Math.max(sheet.getLastRow(), 2);
+
+  styleHeaderRange_(sheet.getRange(1, 1, 1, HEADERS.length), '#C62828');
+
+  sheet.getRange(2, 2, lastRow - 1, 1).setNumberFormat('yyyy-mm-dd hh:mm');
+  sheet.getRange(2, 7, lastRow - 1, 3).setNumberFormat('#,##0');
+  sheet.getRange(2, 15, lastRow - 1, 1).setNumberFormat('yyyy-mm-dd hh:mm');
+
+  sheet.getRange(1, 1, lastRow, HEADERS.length)
+    .setVerticalAlignment('top')
+    .setWrap(true);
+
+  setWidths_(sheet, [60,140,360,280,120,90,110,110,110,130,100,220,70,260,140]);
+  applyFilter_(sheet, HEADERS.length);
+}
+
+function applyShortsValidations_(sheet) {
+  setValidation_(sheet, 10, ['Minecraft', '龍が如く', 'AEW・プロレス', '雑談', 'その他']);
+  setValidation_(sheet, 11, ['公開中', '非公開', '要確認', 'リメイク候補']);
+  setValidation_(sheet, 13, ['S', 'A', 'B', 'C']);
+}
+
+function parseYouTubeDate_(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  return isNaN(date.getTime()) ? value : date;
+}
+
+function jsonResponse_(payload) {
+  return ContentService
+    .createTextOutput(JSON.stringify(payload))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
