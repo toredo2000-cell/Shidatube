@@ -106,11 +106,40 @@ function getSetupToken_() {
   return PropertiesService.getScriptProperties().getProperty(SETUP_TOKEN_PROPERTY) || '';
 }
 
-function doGet() {
+function doGet(e) {
+  const params = e && e.parameter ? e.parameter : {};
+  if (params.mode === 'clip') {
+    return buildClipPlayerHtml_(params.videoId, params.start);
+  }
+
   return jsonResponse_({
     ok: true,
     service: 'ShidaTube Shorts Sheet Receiver'
   });
+}
+
+function buildClipPlayerHtml_(videoIdValue, startValue) {
+  const videoId = extractYouTubeVideoId_(videoIdValue);
+  const start = Math.max(Math.floor(Number(startValue) || 0), 0);
+  if (!videoId) {
+    return HtmlService.createHtmlOutput(
+      '<!doctype html><html><body><p>動画IDを確認できませんでした。</p></body></html>'
+    ).setTitle('ShidaTube 再生位置エラー');
+  }
+
+  const embedUrl = 'https://www.youtube-nocookie.com/embed/' + videoId
+    + '?start=' + start + '&autoplay=1&playsinline=1&rel=0';
+  const watchUrl = 'https://www.youtube.com/watch?v=' + videoId + '&t=' + start + 's';
+  const html = '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">'
+    + '<style>body{margin:0;background:#111;color:#fff;font-family:Arial,sans-serif}'
+    + '.wrap{max-width:1200px;margin:0 auto;padding:16px}.player{position:relative;padding-top:56.25%}'
+    + 'iframe{position:absolute;inset:0;width:100%;height:100%;border:0}'
+    + 'p{margin:12px 0 0}a{color:#90caf9}</style></head><body><div class="wrap">'
+    + '<div class="player"><iframe src="' + embedUrl + '" allow="autoplay; encrypted-media; picture-in-picture" '
+    + 'referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe></div>'
+    + '<p>指定位置: ' + start + '秒　<a href="' + watchUrl + '" target="_blank" rel="noopener">通常のYouTubeで開く</a></p>'
+    + '</div></body></html>';
+  return HtmlService.createHtmlOutput(html).setTitle('ShidaTube 指定位置プレーヤー');
 }
 
 function doPost(e) {
@@ -1406,10 +1435,17 @@ function buildYouTubeTimestampUrl_(sourceUrl, seconds) {
   if (!sourceUrl || seconds === null || seconds < 0) return '';
 
   const videoId = extractYouTubeVideoId_(sourceUrl);
-  if (videoId) {
-    return 'https://youtu.be/' + videoId + '?t=' + seconds + 's&autoplay=1';
+  if (!videoId) return '';
+
+  const webAppUrl = ScriptApp.getService().getUrl();
+  if (webAppUrl) {
+    return webAppUrl
+      + '?mode=clip&videoId=' + encodeURIComponent(videoId)
+      + '&start=' + encodeURIComponent(seconds);
   }
-  return '';
+
+  // Webアプリが未公開の場合だけ通常のYouTubeリンクへ戻す。
+  return 'https://www.youtube.com/watch?v=' + videoId + '&t=' + seconds + 's';
 }
 
 function extractYouTubeVideoId_(value) {
