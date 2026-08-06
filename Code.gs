@@ -287,6 +287,9 @@ function setupDashboard_(ss) {
   let sheet = ss.getSheetByName('Dashboard');
   if (!sheet) sheet = ss.insertSheet('Dashboard', 0);
 
+  // 手入力の週次チェックは、ダッシュボード更新後も保持する。
+  const weeklyCheckValues = sheet.getRange('D85:M89').getValues().map(row => row[0]);
+
   // 既存の結合状態をすべて解除してから作り直す
   sheet
     .getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns())
@@ -453,6 +456,41 @@ function setupDashboard_(ss) {
   writeRecentTop10Section_(sheet, 'Shorts一覧', 'Shorts 最近の勢い TOP10', 44, '#C62828');
   writeRecentTop10Section_(sheet, '通常動画一覧', '通常動画 最近の勢い TOP10', 57, '#00838F');
   writeRecentTop10Section_(sheet, 'ライブ一覧', 'ライブ配信 最近の勢い TOP10', 70, '#1565C0');
+
+  // 今週の運営チェック（手入力内容は次回更新時も保持）
+  sheet.getRange('A83:M83').merge()
+    .setValue('今週の運営チェック')
+    .setBackground('#2E7D32')
+    .setFontColor('#FFFFFF')
+    .setFontWeight('bold')
+    .setFontSize(14)
+    .setHorizontalAlignment('center');
+
+  const weeklyCheckLabels = [
+    '今週伸びた動画',
+    '伸びた理由',
+    '次に作るShorts',
+    '次に作る通常動画',
+    '公開予定日'
+  ];
+
+  weeklyCheckLabels.forEach((label, index) => {
+    const row = 85 + index;
+    sheet.getRange(row, 1, 1, 3).merge()
+      .setValue(label)
+      .setBackground('#E8F5E9')
+      .setFontWeight('bold')
+      .setVerticalAlignment('middle');
+    sheet.getRange(row, 4, 1, 10).merge()
+      .setValue(weeklyCheckValues[index] || '')
+      .setBackground('#FFFFFF')
+      .setWrap(true)
+      .setVerticalAlignment('middle');
+    sheet.getRange(row, 1, 1, 13)
+      .setBorder(true, true, true, true, true, true);
+    sheet.setRowHeight(row, row === 86 ? 56 : 40);
+  });
+  sheet.getRange('D89').setNumberFormat('yyyy-mm-dd');
 
   setWidths_(sheet, [60, 130, 300, 105, 110, 100, 90, 120, 90, 300, 105, 110, 100]);
   sheet.setFrozenRows(1);
