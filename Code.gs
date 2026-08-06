@@ -831,16 +831,21 @@ function setupAnalyticsDashboard_(ss) {
 
 function renderZipAnalyticsDashboard_(ss, dashboard) {
   const startRow = 76;
-  dashboard.getRange(startRow, 1, 1, 10).merge()
+  dashboard.getRange(startRow, 1, 1, 9).merge()
     .setValue('YouTube Studio 詳細分析')
     .setBackground('#37474F').setFontColor('#FFFFFF').setFontWeight('bold')
-    .setFontSize(16).setHorizontalAlignment('center');
+    .setFontSize(12).setHorizontalAlignment('center');
+  dashboard.setRowHeight(startRow, 24);
 
   const period = getZipAnalyticsPeriod_(ss);
-  dashboard.getRange(startRow + 1, 1, 1, 10).merge()
+  dashboard.getRange(startRow + 1, 1, 1, 9).merge()
     .setValue(period ? '対象期間: ' + period : '「YouTube分析ZIPを取り込む」を実行してください')
-    .setBackground('#ECEFF1').setHorizontalAlignment('center');
+    .setBackground('#ECEFF1').setFontColor('#455A64')
+    .setFontSize(9).setHorizontalAlignment('center');
+  dashboard.setRowHeight(startRow + 1, 20);
 
+  // 既存ダッシュボードの中央幅に合わせ、左右2列のカードとして配置する。
+  // 各カードは4列幅（項目名3列＋数値1列）とし、長い項目名も読みやすくする。
   renderZipAnalyticsBlock_(ss, dashboard, 'チャンネル登録状況', 79, 1, 4);
   renderZipAnalyticsBlock_(ss, dashboard, 'チャンネル登録元', 79, 6, 6);
   renderZipAnalyticsBlock_(ss, dashboard, 'デバイスのタイプ', 88, 1, 6);
@@ -849,6 +854,9 @@ function renderZipAnalyticsDashboard_(ss, dashboard) {
   renderZipAnalyticsBlock_(ss, dashboard, '字幕', 97, 6, 8);
   renderZipAnalyticsBlock_(ss, dashboard, '翻訳版の使用', 110, 1, 5);
   renderZipAnalyticsBlock_(ss, dashboard, '終了画面要素', 110, 6, 8);
+
+  // E列をカード間の余白として固定し、追加分析部分だけが横に間延びしないようにする。
+  dashboard.setColumnWidth(5, 28);
 }
 
 function getZipAnalyticsPeriod_(ss) {
@@ -861,39 +869,63 @@ function getZipAnalyticsPeriod_(ss) {
 
 function renderZipAnalyticsBlock_(ss, dashboard, key, row, column, maxRows) {
   const config = ZIP_ANALYTICS_CONFIG.find(item => item.key === key);
-  dashboard.getRange(row, column, 1, 2).merge().setValue(config ? config.title : key)
-    .setBackground('#607D8B').setFontColor('#FFFFFF').setFontWeight('bold')
-    .setHorizontalAlignment('center');
+  const cardWidth = 4;
+  const labelWidth = 3;
+  dashboard.getRange(row, column, 1, cardWidth).merge().setValue(config ? config.title : key)
+    .setBackground('#455A64').setFontColor('#FFFFFF').setFontWeight('bold')
+    .setFontSize(11).setHorizontalAlignment('left').setVerticalAlignment('middle');
+  dashboard.setRowHeight(row, 25);
 
   const source = ss.getSheetByName(ZIP_ANALYTICS_SHEET_PREFIX + key);
   if (!source || source.getLastRow() < 7) {
-    dashboard.getRange(row + 1, column, 1, 2).merge().setValue('データ未取込');
+    dashboard.getRange(row + 1, column, 1, cardWidth).merge().setValue('データ未取込')
+      .setBackground('#FAFAFA').setFontColor('#78909C').setHorizontalAlignment('center')
+      .setBorder(true, true, true, true, false, false, '#CFD8DC', SpreadsheetApp.BorderStyle.SOLID);
     return;
   }
 
   const values = source.getRange(6, 1, source.getLastRow() - 5, source.getLastColumn()).getDisplayValues();
   const header = values[0] || [];
   const body = values.slice(1).filter(item => item[0] && item[0] !== '合計').slice(0, maxRows);
-  dashboard.getRange(row + 1, column, 1, 2).setValues([[header[0] || key, header[1] || '値']]);
-  styleHeaderRange_(dashboard.getRange(row + 1, column, 1, 2), '#90A4AE');
+  const headerLabel = dashboard.getRange(row + 1, column, 1, labelWidth).merge();
+  const headerValue = dashboard.getRange(row + 1, column + labelWidth);
+  headerLabel.setValue(header[0] || key);
+  headerValue.setValue(header[1] || '値');
+  styleHeaderRange_(dashboard.getRange(row + 1, column, 1, cardWidth), '#90A4AE');
+  dashboard.getRange(row + 1, column, 1, cardWidth).setFontSize(9);
+  dashboard.setRowHeight(row + 1, 20);
 
+  const outputRows = [];
   if (key === '終了画面要素') {
     const total = values.slice(1).find(item => item[0] === '合計');
     if (total) {
-      dashboard.getRange(row + 2, column, 3, 2).setValues([
+      outputRows.push.apply(outputRows, [
         ['表示回数', total[1] || '0'],
         ['クリック数', total[2] || '0'],
         ['クリック率', (total[3] || '0') + '%']
       ]);
     }
   } else if (body.length) {
-    dashboard.getRange(row + 2, column, body.length, 2).setValues(body.map(item => [item[0], item[1]]));
-    dashboard.getRange(row + 2, column + 1, body.length, 1).setHorizontalAlignment('right');
+    body.forEach(item => outputRows.push([item[0], item[1]]));
   }
 
-  const displayedRows = key === '終了画面要素' ? 4 : Math.max(body.length + 1, 2);
-  dashboard.getRange(row + 1, column, displayedRows, 2)
-    .setBorder(true, true, true, true, true, true).setWrap(true);
+  outputRows.forEach((item, index) => {
+    const outputRow = row + 2 + index;
+    dashboard.getRange(outputRow, column, 1, labelWidth).merge().setValue(item[0]);
+    dashboard.getRange(outputRow, column + labelWidth).setValue(item[1]).setHorizontalAlignment('right');
+  });
+
+  const displayedRows = Math.max(outputRows.length + 1, 2);
+  dashboard.getRange(row + 1, column, displayedRows, cardWidth)
+    .setBorder(true, true, true, true, true, true, '#B0BEC5', SpreadsheetApp.BorderStyle.SOLID)
+    .setFontSize(9).setVerticalAlignment('middle').setWrap(true);
+
+  for (let offset = 1; offset <= displayedRows; offset++) {
+    dashboard.setRowHeight(row + offset, offset === 1 ? 20 : 23);
+    if (offset > 1 && offset % 2 === 1) {
+      dashboard.getRange(row + offset, column, 1, cardWidth).setBackground('#F5F7F8');
+    }
+  }
 }
 
 function readAnalyticsVideoRows_(sheet) {
