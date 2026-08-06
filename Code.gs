@@ -25,6 +25,8 @@ function onOpen() {
     .addItem('運営シートを初期設定', 'setupDailyOperations')
     .addItem('認証トークンを設定', 'setSetupToken')
     .addItem('ダッシュボードを更新', 'refreshDashboard')
+    .addItem('分析CSVシートを準備', 'setupAnalyticsSheets')
+    .addItem('90日分析を更新', 'refreshAnalyticsDashboard')
     .addSeparator()
     .addItem('投稿管理に新しい行を追加', 'addPostingRow')
     .addItem('切り抜き候補に新しい行を追加', 'addClipRow')
@@ -41,7 +43,9 @@ function setupDailyOperations() {
   setupPostingSheet_(ss);
   setupIdeaSheet_(ss);
   setupMasterSheet_(ss);
+  setupAnalyticsSheets_(ss);
   setupDashboard_(ss);
+  setupAnalyticsDashboard_(ss);
 
   ss.setActiveSheet(ss.getSheetByName('Dashboard'));
   SpreadsheetApp.getUi().alert('ShidaTube運営管理シートの初期設定が完了しました。');
@@ -550,9 +554,323 @@ function writeRecentTop10Section_(dashboard, sourceSheetName, title, titleRow, c
     .setBorder(true, true, true, true, true, true);
 }
 
+
+const ANALYTICS_VIDEO_SHEET = 'Analytics_動画別';
+const ANALYTICS_DAILY_SHEET = 'Analytics_日別';
+const ANALYTICS_TREND_SHEET = 'Analytics_上位動画推移';
+
+function setupAnalyticsSheets() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  setupAnalyticsSheets_(ss);
+  SpreadsheetApp.getUi().alert(
+    'CSV貼り付け用の3シートを準備しました。\n' +
+    '各CSVを、対応するシートのA1セルから貼り付けてください。'
+  );
+}
+
+function setupAnalyticsSheets_(ss) {
+  const definitions = [
+    {
+      name: ANALYTICS_VIDEO_SHEET,
+      color: '#AD1457',
+      headers: [
+        'コンテンツ', '動画のタイトル', '動画公開時刻', '長さ', '視聴回数',
+        '総再生時間（単位: 時間）', 'チャンネル登録者', '推定収益 (JPY)',
+        'インプレッション数', 'インプレッションのクリック率 (%)'
+      ],
+      widths: [130, 420, 150, 90, 110, 160, 120, 130, 130, 180]
+    },
+    {
+      name: ANALYTICS_DAILY_SHEET,
+      color: '#6A1B9A',
+      headers: ['日付', '視聴回数'],
+      widths: [140, 120]
+    },
+    {
+      name: ANALYTICS_TREND_SHEET,
+      color: '#1565C0',
+      headers: ['日付', 'コンテンツ', '動画のタイトル', '動画公開時刻', '長さ', '視聴回数'],
+      widths: [140, 130, 420, 150, 90, 110]
+    }
+  ];
+
+  definitions.forEach(def => {
+    let sheet = ss.getSheetByName(def.name);
+    if (!sheet) sheet = ss.insertSheet(def.name);
+    if (sheet.getLastRow() === 0 || sheet.getRange(1, 1).getValue() === '') {
+      sheet.getRange(1, 1, 1, def.headers.length).setValues([def.headers]);
+    }
+    styleHeaderRange_(sheet.getRange(1, 1, 1, def.headers.length), def.color);
+    setWidths_(sheet, def.widths);
+    sheet.setFrozenRows(1);
+  });
+}
+
+function refreshAnalyticsDashboard() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  setupAnalyticsSheets_(ss);
+  setupAnalyticsDashboard_(ss);
+  ss.setActiveSheet(ss.getSheetByName('Analytics Dashboard'));
+  SpreadsheetApp.getUi().alert('90日分析を更新しました。');
+}
+
+function setupAnalyticsDashboard_(ss) {
+  let dashboard = ss.getSheetByName('Analytics Dashboard');
+  if (!dashboard) dashboard = ss.insertSheet('Analytics Dashboard', 1);
+
+  dashboard.getRange(1, 1, dashboard.getMaxRows(), dashboard.getMaxColumns()).breakApart();
+  dashboard.clear();
+  dashboard.getCharts().forEach(chart => dashboard.removeChart(chart));
+  dashboard.setHiddenGridlines(true);
+
+  dashboard.getRange('A1:J1').merge()
+    .setValue('ShidaTube 90日アナリティクス')
+    .setBackground('#AD1457')
+    .setFontColor('#FFFFFF')
+    .setFontWeight('bold')
+    .setFontSize(20)
+    .setHorizontalAlignment('center');
+
+  dashboard.getRange('A2:J2').merge()
+    .setValue('YouTube StudioのCSVを貼り付け、「ShidaTube管理」→「90日分析を更新」で再集計します。')
+    .setBackground('#FCE4EC')
+    .setFontColor('#880E4F')
+    .setWrap(true);
+
+  const videoSheet = ss.getSheetByName(ANALYTICS_VIDEO_SHEET);
+  const analyticsRows = readAnalyticsVideoRows_(videoSheet);
+  const typeByVideoId = buildVideoTypeMap_(ss);
+  const items = analyticsRows
+    .filter(row => row.videoId && row.title)
+    .map(row => {
+      row.type = typeByVideoId[row.videoId] || '未分類';
+      row.url = 'https://www.youtube.com/watch?v=' + row.videoId;
+      row.avgViewSeconds = row.views > 0 ? row.watchHours * 3600 / row.views : 0;
+      row.subsPerThousand = row.views > 0 ? row.subscribers * 1000 / row.views : 0;
+      row.rpm = row.views > 0 ? row.revenue * 1000 / row.views : 0;
+      return row;
+    });
+
+  const total = items.reduce((sum, item) => {
+    sum.views += item.views;
+    sum.watchHours += item.watchHours;
+    sum.subscribers += item.subscribers;
+    sum.revenue += item.revenue;
+    sum.impressions += item.impressions;
+    sum.ctrWeighted += item.impressions * item.ctr;
+    return sum;
+  }, { views: 0, watchHours: 0, subscribers: 0, revenue: 0, impressions: 0, ctrWeighted: 0 });
+
+  const period = getAnalyticsPeriod_(ss.getSheetByName(ANALYTICS_DAILY_SHEET));
+  const periodLabel = period.start && period.end
+    ? Utilities.formatDate(period.start, Session.getScriptTimeZone(), 'yyyy-MM-dd') + ' ～ ' +
+      Utilities.formatDate(period.end, Session.getScriptTimeZone(), 'yyyy-MM-dd')
+    : 'CSVの日付を確認してください';
+
+  dashboard.getRange('A4:B4').setValues([['集計期間', periodLabel]]);
+  dashboard.getRange('A5:B10').setValues([
+    ['対象動画数', items.length],
+    ['視聴回数', total.views],
+    ['総再生時間（時間）', total.watchHours],
+    ['登録者獲得', total.subscribers],
+    ['推定収益（JPY）', total.revenue],
+    ['加重平均CTR', total.impressions > 0 ? total.ctrWeighted / total.impressions / 100 : 0]
+  ]);
+  styleHeaderRange_(dashboard.getRange('A4:A10'), '#455A64');
+  dashboard.getRange('A4:B10').setBorder(true, true, true, true, true, true);
+  dashboard.getRange('B5:B8').setNumberFormat('#,##0');
+  dashboard.getRange('B9').setNumberFormat('¥#,##0');
+  dashboard.getRange('B10').setNumberFormat('0.00%');
+
+  writeAnalyticsTypeSummary_(dashboard, items, 4, 4);
+  writeAnalyticsRanking_(dashboard, items, '直近90日 再生数 TOP10', 13, 'views', '#C62828');
+  writeAnalyticsRanking_(dashboard, items, '登録者獲得 TOP10', 26, 'subscribers', '#2E7D32');
+  writeAnalyticsRanking_(dashboard, items, '総再生時間 TOP10', 39, 'watchHours', '#1565C0');
+  writeAnalyticsDailyChart_(dashboard, ss.getSheetByName(ANALYTICS_DAILY_SHEET), 53);
+
+  setWidths_(dashboard, [60, 130, 330, 100, 110, 110, 105, 115, 105, 110]);
+  dashboard.setFrozenRows(2);
+}
+
+function readAnalyticsVideoRows_(sheet) {
+  if (!sheet || sheet.getLastRow() < 2) return [];
+  return sheet.getRange(2, 1, sheet.getLastRow() - 1, 10).getValues()
+    .filter(row => String(row[0] || '').trim() && String(row[0] || '').trim() !== '合計')
+    .map(row => ({
+      videoId: String(row[0] || '').trim(),
+      title: String(row[1] || ''),
+      publishedAt: parseAnalyticsDate_(row[2]),
+      durationSeconds: toNumber_(row[3]),
+      views: toNumber_(row[4]),
+      watchHours: toNumber_(row[5]),
+      subscribers: toNumber_(row[6]),
+      revenue: toNumber_(row[7]),
+      impressions: toNumber_(row[8]),
+      ctr: toNumber_(row[9])
+    }));
+}
+
+function buildVideoTypeMap_(ss) {
+  const map = {};
+  [
+    ['Shorts一覧', 'Shorts'],
+    ['通常動画一覧', '通常動画'],
+    ['ライブ一覧', 'ライブ配信']
+  ].forEach(pair => {
+    const sheet = ss.getSheetByName(pair[0]);
+    if (!sheet || sheet.getLastRow() < 2) return;
+    sheet.getRange(2, 5, sheet.getLastRow() - 1, 1).getValues().forEach(row => {
+      const id = String(row[0] || '').trim();
+      if (id) map[id] = pair[1];
+    });
+  });
+  return map;
+}
+
+function writeAnalyticsTypeSummary_(dashboard, items, startRow, startColumn) {
+  const headers = [
+    '種類', '動画数', '再生回数', '総再生時間', '登録者',
+    '登録者/千再生', '平均視聴時間', '推定収益', 'RPM', '加重平均CTR'
+  ];
+  dashboard.getRange(startRow, startColumn, 1, headers.length).setValues([headers]);
+  styleHeaderRange_(dashboard.getRange(startRow, startColumn, 1, headers.length), '#263238');
+
+  const types = ['Shorts', '通常動画', 'ライブ配信', '未分類'];
+  const rows = types.map(type => {
+    const selected = items.filter(item => item.type === type);
+    const totals = selected.reduce((sum, item) => {
+      sum.views += item.views;
+      sum.watchHours += item.watchHours;
+      sum.subscribers += item.subscribers;
+      sum.revenue += item.revenue;
+      sum.impressions += item.impressions;
+      sum.ctrWeighted += item.impressions * item.ctr;
+      return sum;
+    }, { views: 0, watchHours: 0, subscribers: 0, revenue: 0, impressions: 0, ctrWeighted: 0 });
+    return [
+      type,
+      selected.length,
+      totals.views,
+      totals.watchHours,
+      totals.subscribers,
+      totals.views > 0 ? totals.subscribers * 1000 / totals.views : 0,
+      totals.views > 0 ? totals.watchHours * 3600 / totals.views : 0,
+      totals.revenue,
+      totals.views > 0 ? totals.revenue * 1000 / totals.views : 0,
+      totals.impressions > 0 ? totals.ctrWeighted / totals.impressions / 100 : 0
+    ];
+  });
+
+  dashboard.getRange(startRow + 1, startColumn, rows.length, headers.length).setValues(rows)
+    .setBorder(true, true, true, true, true, true);
+  dashboard.getRange(startRow + 1, startColumn + 1, rows.length, 5).setNumberFormat('#,##0.0');
+  dashboard.getRange(startRow + 1, startColumn + 6, rows.length, 1).setNumberFormat('0.0"秒"');
+  dashboard.getRange(startRow + 1, startColumn + 7, rows.length, 2).setNumberFormat('¥#,##0.00');
+  dashboard.getRange(startRow + 1, startColumn + 9, rows.length, 1).setNumberFormat('0.00%');
+}
+
+function writeAnalyticsRanking_(dashboard, items, title, titleRow, sortKey, color) {
+  dashboard.getRange(titleRow, 1, 1, 10).merge()
+    .setValue(title)
+    .setBackground(color)
+    .setFontColor('#FFFFFF')
+    .setFontWeight('bold')
+    .setHorizontalAlignment('center');
+
+  const headerRow = titleRow + 1;
+  const startRow = titleRow + 2;
+  dashboard.getRange(headerRow, 1, 1, 10).setValues([[
+    '順位', 'サムネイル', 'タイトル', '種類', '視聴回数',
+    '総再生時間', '登録者', '登録者/千再生', 'CTR', '平均視聴時間'
+  ]]);
+  styleHeaderRange_(dashboard.getRange(headerRow, 1, 1, 10), '#263238');
+
+  const rows = items.slice()
+    .sort((a, b) => Number(b[sortKey] || 0) - Number(a[sortKey] || 0))
+    .slice(0, 10);
+
+  const output = dashboard.getRange(startRow, 1, 10, 10);
+  output.clearContent();
+
+  rows.forEach((item, index) => {
+    const row = startRow + index;
+    dashboard.getRange(row, 1).setValue(index + 1);
+    dashboard.getRange(row, 2).setFormula(
+      '=IFERROR(IMAGE("https://i.ytimg.com/vi/' + item.videoId + '/mqdefault.jpg",4,68,120),"")'
+    );
+    dashboard.getRange(row, 3).setRichTextValue(
+      SpreadsheetApp.newRichTextValue().setText(item.title).setLinkUrl(item.url).build()
+    );
+    dashboard.getRange(row, 4, 1, 7).setValues([[
+      item.type, item.views, item.watchHours, item.subscribers,
+      item.subsPerThousand, item.ctr / 100, item.avgViewSeconds
+    ]]);
+    dashboard.setRowHeight(row, 75);
+  });
+
+  dashboard.getRange(startRow, 5, 10, 3).setNumberFormat('#,##0.0');
+  dashboard.getRange(startRow, 8, 10, 1).setNumberFormat('0.00');
+  dashboard.getRange(startRow, 9, 10, 1).setNumberFormat('0.00%');
+  dashboard.getRange(startRow, 10, 10, 1).setNumberFormat('0.0"秒"');
+  output.setVerticalAlignment('middle').setWrap(true)
+    .setBorder(true, true, true, true, true, true);
+}
+
+function writeAnalyticsDailyChart_(dashboard, dailySheet, titleRow) {
+  dashboard.getRange(titleRow, 1, 1, 10).merge()
+    .setValue('チャンネル全体 日別再生数')
+    .setBackground('#6A1B9A')
+    .setFontColor('#FFFFFF')
+    .setFontWeight('bold')
+    .setHorizontalAlignment('center');
+
+  if (!dailySheet || dailySheet.getLastRow() < 2) {
+    dashboard.getRange(titleRow + 1, 1).setValue('Analytics_日別シートに合計.csvを貼り付けてください。');
+    return;
+  }
+
+  const chart = dashboard.newChart()
+    .setChartType(Charts.ChartType.LINE)
+    .addRange(dailySheet.getRange(1, 1, dailySheet.getLastRow(), 2))
+    .setPosition(titleRow + 1, 1, 0, 0)
+    .setOption('title', '日別再生数の推移')
+    .setOption('legend', { position: 'none' })
+    .setOption('width', 900)
+    .setOption('height', 360)
+    .build();
+  dashboard.insertChart(chart);
+}
+
+function getAnalyticsPeriod_(dailySheet) {
+  if (!dailySheet || dailySheet.getLastRow() < 2) return { start: null, end: null };
+  const dates = dailySheet.getRange(2, 1, dailySheet.getLastRow() - 1, 1).getValues()
+    .map(row => parseAnalyticsDate_(row[0]))
+    .filter(date => date && !isNaN(date.getTime()))
+    .sort((a, b) => a.getTime() - b.getTime());
+  return {
+    start: dates.length ? dates[0] : null,
+    end: dates.length ? dates[dates.length - 1] : null
+  };
+}
+
+function parseAnalyticsDate_(value) {
+  if (value instanceof Date) return value;
+  if (!value) return null;
+  const date = new Date(value);
+  return isNaN(date.getTime()) ? null : date;
+}
+
+function toNumber_(value) {
+  if (typeof value === 'number') return isFinite(value) ? value : 0;
+  const number = Number(String(value || '').replace(/,/g, '').replace(/%/g, '').trim());
+  return isFinite(number) ? number : 0;
+}
+
 function refreshDashboard() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   setupDashboard_(ss);
+  setupAnalyticsSheets_(ss);
+  setupAnalyticsDashboard_(ss);
 }
 
 function addPostingRow() {
