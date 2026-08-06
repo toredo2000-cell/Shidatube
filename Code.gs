@@ -378,7 +378,25 @@ function setupDashboard_(ss) {
 
   sheet.getRange('H16:H20').setNumberFormat('#,##0');
 
-  setWidths_(sheet, [60, 130, 300, 105, 110, 100, 35, 60, 130, 300, 105, 110, 100]);
+  // 最近の傾向：直近90日以内に公開された動画を、公開後1日平均再生数で比較
+  sheet.getRange('A41:I41').merge()
+    .setValue('最近の傾向（直近90日公開・1日平均再生数 TOP10）')
+    .setBackground('#AD1457')
+    .setFontColor('#FFFFFF')
+    .setFontWeight('bold')
+    .setFontSize(14)
+    .setHorizontalAlignment('center');
+  sheet.getRange('A42:I42').merge()
+    .setValue('注：過去90日間に増えた再生数ではなく、直近90日以内に公開された動画の累計値を公開後日数で割った比較です。')
+    .setBackground('#FCE4EC')
+    .setFontColor('#880E4F')
+    .setWrap(true);
+
+  writeRecentTop10Section_(sheet, 'Shorts一覧', 'Shorts 最近の勢い TOP10', 44, '#C62828');
+  writeRecentTop10Section_(sheet, '通常動画一覧', '通常動画 最近の勢い TOP10', 57, '#00838F');
+  writeRecentTop10Section_(sheet, 'ライブ一覧', 'ライブ配信 最近の勢い TOP10', 70, '#1565C0');
+
+  setWidths_(sheet, [60, 130, 300, 105, 110, 100, 90, 120, 90, 300, 105, 110, 100]);
   sheet.setFrozenRows(1);
 }
 
@@ -428,6 +446,104 @@ function writeDashboardTop10_(dashboard, sourceSheetName, startRow, startColumn)
 
   dashboard.getRange(startRow, startColumn + 3, 10, 1).setNumberFormat('yyyy-mm-dd');
   dashboard.getRange(startRow, startColumn + 4, 10, 2).setNumberFormat('#,##0');
+  outputRange
+    .setVerticalAlignment('middle')
+    .setWrap(true)
+    .setBorder(true, true, true, true, true, true);
+}
+
+function writeRecentTop10Section_(dashboard, sourceSheetName, title, titleRow, color) {
+  dashboard.getRange(titleRow, 1, 1, 9).merge()
+    .setValue(title)
+    .setBackground(color)
+    .setFontColor('#FFFFFF')
+    .setFontWeight('bold')
+    .setHorizontalAlignment('center');
+
+  const headerRow = titleRow + 1;
+  const startRow = titleRow + 2;
+  dashboard.getRange(headerRow, 1, 1, 9).setValues([[
+    '順位', 'サムネイル', 'タイトル', '投稿日', '再生回数',
+    '高評価数', '公開後日数', '1日平均再生数', '高評価率'
+  ]]);
+  styleHeaderRange_(dashboard.getRange(headerRow, 1, 1, 9), '#263238');
+
+  const outputRange = dashboard.getRange(startRow, 1, 10, 9);
+  outputRange.clearContent();
+
+  const source = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sourceSheetName);
+  if (!source || source.getLastRow() < 2) return;
+
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const cutoff = new Date(today);
+  cutoff.setDate(cutoff.getDate() - 90);
+
+  // B:H = 投稿日、タイトル、URL、動画ID、長さ、再生回数、高評価数
+  const rows = source.getRange(2, 2, source.getLastRow() - 1, 7)
+    .getValues()
+    .map(row => {
+      const publishedAt = row[0] instanceof Date ? row[0] : new Date(row[0]);
+      if (isNaN(publishedAt.getTime()) || publishedAt < cutoff || publishedAt > now) return null;
+      const publishedDate = new Date(
+        publishedAt.getFullYear(), publishedAt.getMonth(), publishedAt.getDate()
+      );
+      const daysSincePublished = Math.max(
+        1,
+        Math.floor((today.getTime() - publishedDate.getTime()) / 86400000) + 1
+      );
+      const viewCount = Number(row[5] || 0);
+      const likeCount = Number(row[6] || 0);
+      return {
+        publishedAt: publishedAt,
+        title: String(row[1] || ''),
+        url: String(row[2] || ''),
+        videoId: String(row[3] || ''),
+        viewCount: viewCount,
+        likeCount: likeCount,
+        days: daysSincePublished,
+        viewsPerDay: viewCount / daysSincePublished,
+        likeRate: viewCount > 0 ? likeCount / viewCount : 0
+      };
+    })
+    .filter(item => item && item.title && item.videoId)
+    .sort((a, b) => b.viewsPerDay - a.viewsPerDay)
+    .slice(0, 10);
+
+  rows.forEach((item, index) => {
+    const targetRow = startRow + index;
+    dashboard.getRange(targetRow, 1).setValue(index + 1);
+    dashboard.getRange(targetRow, 2).setFormula(
+      '=IFERROR(IMAGE("https://i.ytimg.com/vi/' + item.videoId + '/mqdefault.jpg",4,68,120),"")'
+    );
+
+    const titleCell = dashboard.getRange(targetRow, 3);
+    if (item.url) {
+      titleCell.setRichTextValue(
+        SpreadsheetApp.newRichTextValue()
+          .setText(item.title)
+          .setLinkUrl(item.url)
+          .build()
+      );
+    } else {
+      titleCell.setValue(item.title);
+    }
+
+    dashboard.getRange(targetRow, 4, 1, 6).setValues([[
+      item.publishedAt,
+      item.viewCount,
+      item.likeCount,
+      item.days,
+      item.viewsPerDay,
+      item.likeRate
+    ]]);
+    dashboard.setRowHeight(targetRow, 75);
+  });
+
+  dashboard.getRange(startRow, 4, 10, 1).setNumberFormat('yyyy-mm-dd');
+  dashboard.getRange(startRow, 5, 10, 3).setNumberFormat('#,##0');
+  dashboard.getRange(startRow, 8, 10, 1).setNumberFormat('#,##0.0');
+  dashboard.getRange(startRow, 9, 10, 1).setNumberFormat('0.0%');
   outputRange
     .setVerticalAlignment('middle')
     .setWrap(true)
