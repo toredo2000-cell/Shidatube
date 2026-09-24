@@ -1,0 +1,5 @@
+channel_id,label,category
+# 行頭が # の行は無視されます。以下の形式で競合チャンネルを追加してください。
+# category の例: wrestler / gaming / collab_candidate
+# UCxxxxxxxxxxxxxxxxxxxxxx,チャンネル名,wrestler
+# UCyyyyyyyyyyyyyyyyyyyyyy,チャンネル名,gaming

@@ -1,0 +1,8 @@
+date,type,description,related_video_id
+# 動画の伸びの「外部要因」を記録するシートです。行頭が # の行は無視されます。
+# date: 日本時間の日付 (YYYY-MM-DD)
+# type: announcement（告知投稿）/ match（試合）/ collab（コラボ）/ live（配信）/ press（メディア露出）/ other
+# description: 何が起きたかを一文で
+# related_video_id: 関連する動画があれば動画ID（任意）
+# 例: 2026-09-14,match,AEW 出場試合,
+# 例: 2026-09-16,announcement,X で新作クリップを告知,abcdefghijk
