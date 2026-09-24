@@ -1,0 +1,38 @@
+name: Shidatube 週次診断レポート
+
+on:
+  schedule:
+    - cron: "15 0 * * 1"  # 毎週月曜 09:15 JST（UTC 00:15）。日次データ取得の15分後
+  workflow_dispatch: {}    # 手動実行ボタン用
+
+permissions:
+  contents: write
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: リポジトリを取得
+        uses: actions/checkout@v4
+
+      - name: Python セットアップ
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 依存関係インストール
+        run: pip install -r analytics/requirements-report.txt
+
+      - name: レポート生成（Claude API）
+        working-directory: analytics
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python weekly_report.py
+
+      - name: レポートをコミット
+        run: |
+          git config user.name "shidatube-analytics-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add analytics/reports
+          git diff --cached --quiet || git commit -m "chore: 週次レポート $(date -u +%Y-%m-%d)"
+          git push
