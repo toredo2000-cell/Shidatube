@@ -79,14 +79,17 @@ def channel_week_over_week(daily_rows: list) -> dict:
     if len(rows) < WEEK_DAYS * 2:
         this_week = sum_window(rows[-WEEK_DAYS:]) if rows else {f: 0 for f in fields}
         return {"this_week": this_week, "last_week": None, "note":
-                "先週分の比較に必要な日数（14日分）がまだ蓄積されていません。"}
+                "先週分の比較に必要な日数（14日分）がまだ蓄積されていません。",
+                "period_this_week": [rows[0]["day"], rows[-1]["day"]] if rows else None}
 
     this_week = sum_window(rows[-WEEK_DAYS:])
     last_week = sum_window(rows[-WEEK_DAYS * 2:-WEEK_DAYS])
     delta_pct = {}
     for f in fields:
+        # 文字列化して % を明示することで、AI側で単位を落とさせない
         if last_week[f]:
-            delta_pct[f] = round((this_week[f] - last_week[f]) / abs(last_week[f]) * 100, 1)
+            pct = round((this_week[f] - last_week[f]) / abs(last_week[f]) * 100, 1)
+            delta_pct[f] = f"{'+' if pct >= 0 else ''}{pct}%"
         else:
             delta_pct[f] = None
     return {"this_week": this_week, "last_week": last_week, "delta_pct": delta_pct,
@@ -137,7 +140,12 @@ def build_stats(snapshot_dir: Path, latest_date: dt.date) -> dict:
     competitors_meta = read_csv(COMPETITORS_CSV)
 
     own_channel = next((c for c in channels if c.get("category") == "own"), {})
-    week_cutoff = (latest_date - dt.timedelta(days=WEEK_DAYS)).isoformat()
+    wow = channel_week_over_week(daily)
+    # レポートの対象期間は、Analytics APIの集計遅延（2日）を反映した実際のデータ期間
+    # （wow の period_this_week）を正とする。無ければ暫定でスナップショット基準の週を使う。
+    period = wow.get("period_this_week") or [
+        (latest_date - dt.timedelta(days=WEEK_DAYS)).isoformat(), latest_date.isoformat()]
+    week_cutoff = period[0]
 
     new_videos = sorted(
         (r for r in summary if r.get("published_at", "") >= week_cutoff),
@@ -192,14 +200,14 @@ def build_stats(snapshot_dir: Path, latest_date: dt.date) -> dict:
 
     return {
         "report_date": latest_date.isoformat(),
-        "period": [week_cutoff, latest_date.isoformat()],
+        "period": period,
         "own_channel": {
             "title": own_channel.get("title"),
             "subscribers": own_channel.get("subscribers"),
             "total_views": own_channel.get("total_views"),
             "video_count": own_channel.get("video_count"),
         },
-        "week_over_week": channel_week_over_week(daily),
+        "week_over_week": wow,
         "new_videos_this_week": new_video_diagnostics,
         "top_movers": top_movers,
         "bottom_movers": bottom_movers,
@@ -236,8 +244,12 @@ SYSTEM_PROMPT = """\
 - 最後に「来週試すこと」として、具体的で実行可能な打ち手を2〜4個、箇条書きで挙げること。
   データに基づかない一般論（「もっと投稿頻度を増やしましょう」等の使い古された助言）は
   避け、今回のデータから導ける具体的な提案にすること。
+- 「要点を絞ること」は、1見出しあたりの分量を絞る意味であり、見出しそのものを省略して
+  よいという意味ではない。以下の7つの見出しは、対応するデータが乏しい場合でも必ず
+  すべて出力すること。該当データが無い場合は「対象となる動画がありませんでした」等、
+  その旨を1〜2行で明記すること（見出しごと省略しない）。
 
-レポートの構成:
+レポートの構成（この7つの見出しを、この順番ですべて出力すること）:
 ## 今週のサマリー
 ## 新着動画の診断
 ## 伸びた動画・伸びなかった動画
@@ -261,11 +273,21 @@ def call_claude(system_prompt: str, user_prompt: str) -> str:
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
     resp = client.messages.create(
         model=MODEL,
-        max_tokens=3000,
+        max_tokens=8000,
         system=system_prompt,
         messages=[{"role": "user", "content": user_prompt}],
     )
-    return "".join(block.text for block in resp.content if getattr(block, "type", "") == "text")
+    text = "".join(block.text for block in resp.content if getattr(block, "type", "") == "text")
+    if resp.stop_reason == "max_tokens":
+        print("  [WARN] レポートが max_tokens で打ち切られました（続きが欠けています）",
+              file=sys.stderr)
+        text += "\n\n> ⚠️ 出力上限に達したため、レポートが途中で打ち切られています。"
+    missing = [h for h in ("## 今週のサマリー", "## 新着動画の診断", "## 伸びた動画・伸びなかった動画",
+                           "## 流入経路", "## 出来事との関連", "## 競合の状況", "## 来週試すこと")
+              if h not in text]
+    if missing:
+        print(f"  [WARN] 見出しが欠けています: {missing}", file=sys.stderr)
+    return text
 
 
 def main() -> int:
