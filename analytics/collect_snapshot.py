@@ -15,6 +15,11 @@
         events.csv に type=ad_campaign で出稿期間を記録しておくと、週次/月次
         レポート側でこの日別データと突き合わせて「広告流入で伸びた分」と
         「オーガニックな伸び」を切り分けやすくなる。
+      - 動画ごと×流入元（insightTrafficSourceType）の視聴回数（レポート期間内）。
+        ADVERTISING を「広告経由の視聴」、それ以外の合計を「オーガニック視聴」として
+        動画単位で切り分ける。SHORTS 経由の視聴も別途記録し、Shorts→VOD/LIVEの
+        導線があったかどうかの判定に使う。取得自体に失敗した動画は
+        ad_data_status="unavailable" とし、「広告の影響は無かった」と断定しない。
   [Reporting API] 動画ごとのサムネイル・インプレッション数とインプレッションCTR
       （Studio 画面でしか見えないと思われがちだが、バルクレポートで自動取得できる。
        詳細は reach_reports.py を参照）
@@ -30,6 +35,7 @@
   MAX_VIDEOS_PER_CHANNEL チャンネルごとに取得する直近動画数（既定 50）
   MAX_VELOCITY_VIDEOS    公開後の日次推移を取る自チャンネル動画数（既定 60・新しい順）
   MAX_RETENTION_VIDEOS   維持率曲線を取る自チャンネル動画数（既定 20・新しい順）
+  MAX_TRAFFIC_VIDEOS     広告/オーガニック内訳を取る自チャンネル動画数（既定 60・新しい順）
   COMPETITORS_CSV        競合リスト（既定 competitors.csv）
   OUT_DIR                出力先（既定 data）
 
@@ -56,6 +62,7 @@ LOOKBACK_DAYS = int(os.environ.get("LOOKBACK_DAYS", "28"))
 MAX_VIDEOS = int(os.environ.get("MAX_VIDEOS_PER_CHANNEL", "50"))
 MAX_VELOCITY_VIDEOS = int(os.environ.get("MAX_VELOCITY_VIDEOS", "60"))
 MAX_RETENTION_VIDEOS = int(os.environ.get("MAX_RETENTION_VIDEOS", "20"))
+MAX_TRAFFIC_VIDEOS = int(os.environ.get("MAX_TRAFFIC_VIDEOS", "60"))
 COMPETITORS_CSV = Path(os.environ.get("COMPETITORS_CSV", "competitors.csv"))
 OUT_ROOT = Path(os.environ.get("OUT_DIR", "data"))
 
@@ -278,19 +285,71 @@ def build_retention(analytics, own_videos, end):
     return curve_rows, summary
 
 
+def build_video_traffic(analytics, own_videos, start, end):
+    """動画ごとに、レポート期間(start〜end、win_views等と同じ期間)内の視聴を
+    流入元別に分解し、広告経由（ADVERTISING）とそれ以外（オーガニック）を
+    動画単位で切り分ける。SHORTS経由の視聴も別途記録し、Shorts→VOD/LIVEの
+    導線があったかどうかの判定材料にする。
+
+    取得自体に失敗した動画（権限・組み合わせの問題等）は ad_data_status を
+    "unavailable" とし、成功したが ADVERTISING の行が無かった（=0件だった）
+    場合と明確に区別する。呼び出し側（レポート生成側）は "unavailable" を
+    「広告影響：未確認」として扱い、「広告影響は無かった」と断定しないこと。"""
+    rows_out, summary = [], {}
+    for v in own_videos[:MAX_TRAFFIC_VIDEOS]:
+        vid, pub = v["video_id"], yc.pt_date(v["published_at"])
+        if pub > end:
+            continue
+        res = run_report(
+            analytics, f"video_traffic:{vid}", start.isoformat(), end.isoformat(),
+            dimensions="insightTrafficSourceType", filters=f"video=={vid}",
+            metrics="views")
+        if res is None:
+            summary[vid] = {
+                "win_paid_views": "", "win_organic_views": "",
+                "win_shorts_referred_views": "", "win_traffic_total_views": "",
+                "ad_data_status": "unavailable",
+            }
+            continue
+        by_type = {}
+        for r in res[1]:
+            src = r.get("insightTrafficSourceType", "")
+            v_count = yc.num(r.get("views")) or 0
+            rows_out.append({"video_id": vid, "insightTrafficSourceType": src, "views": v_count})
+            by_type[src] = v_count
+        total = sum(by_type.values())
+        paid = by_type.get("ADVERTISING", 0)
+        summary[vid] = {
+            "win_paid_views": paid,
+            "win_organic_views": round(total - paid, 2),
+            "win_shorts_referred_views": by_type.get("SHORTS", 0),
+            "win_traffic_total_views": total,
+            "ad_data_status": "ok",
+        }
+    return rows_out, summary
+
+
 SUMMARY_FIELDS = [
     "video_id", "title", "published_at", "duration_sec", "content_type", "content_type_source",
     "url", "views_total", "likes_total", "comments_total",
     "thumbnail_impressions", "thumbnail_ctr",
     "views_first2d", "views_first7d", "views_first28d", "first7d_vs_median",
     "win_views", "win_minutes_watched", "win_avg_view_duration_sec", "win_avg_view_pct",
-    "win_subs_gained", "win_subs_per_1k_views", "pct_views_nonsubscriber",
+    "win_subs_gained", "win_subs_per_1k_views",
+    "win_paid_views", "win_organic_views", "win_shorts_referred_views",
+    "win_traffic_total_views", "ad_data_status",
+    "pct_views_nonsubscriber",
     "ret_10pct", "ret_50pct", "ret_90pct", "relative_retention_avg",
 ]
 
 
-def build_summary(own_videos, by_video_rows, ctype_map, velocity, retention, nonsub, reach):
-    """動画ごとの指標を1行に統合。first7d_vs_median は同じ形式の中央値に対する比率。"""
+def build_summary(own_videos, by_video_rows, ctype_map, velocity, retention, nonsub, reach, traffic=None):
+    """動画ごとの指標を1行に統合。first7d_vs_median は同じ形式の中央値に対する比率。
+
+    traffic は build_video_traffic() が返す summary 辞書（video_id -> 広告/オーガニック
+    内訳）。MAX_TRAFFIC_VIDEOS の対象外だった動画（古い動画など）は ad_data_status を
+    "not_checked" とし、"unavailable"（取得を試みたが失敗）と区別する。"""
+    traffic = traffic or {}
     win = {r["video"]: r for r in by_video_rows}
     fallback = {"short": "SHORTS", "live": "LIVE_STREAM"}
     out = []
@@ -320,6 +379,12 @@ def build_summary(own_videos, by_video_rows, ctype_map, velocity, retention, non
         row.update(velocity.get(vid, {}))
         row.update({k: "" for k in ("ret_10pct", "ret_50pct", "ret_90pct", "relative_retention_avg")})
         row.update(retention.get(vid, {}))
+        row.update({
+            "win_paid_views": "", "win_organic_views": "",
+            "win_shorts_referred_views": "", "win_traffic_total_views": "",
+            "ad_data_status": "not_checked",
+        })
+        row.update(traffic.get(vid, {}))
         out.append(row)
 
     medians = {}
@@ -422,8 +487,13 @@ def main() -> int:
               ["video_id", "elapsed_ratio", "audience_watch_ratio",
                "relative_retention_performance"])
 
+    traffic_rows, traffic_split = build_video_traffic(analytics, own_videos, start, end)
+    yc.write_csv(out_dir / "analytics_video_traffic.csv", traffic_rows,
+              ["video_id", "insightTrafficSourceType", "views"])
+
     summary = build_summary(own_videos, results.get("analytics_by_video", []),
-                            ctype_map, velocity, retention, nonsub, reach_summary)
+                            ctype_map, velocity, retention, nonsub, reach_summary,
+                            traffic_split)
     yc.write_csv(out_dir / "own_video_summary.csv", summary, SUMMARY_FIELDS)
 
     # Analytics が全滅 = 権限またはトークンの問題。自動実行で気付けるよう非0で終了
