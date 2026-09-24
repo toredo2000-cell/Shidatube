@@ -28,6 +28,7 @@ import csv
 import datetime as dt
 import json
 import os
+import re
 import statistics
 import sys
 from pathlib import Path
@@ -55,6 +56,51 @@ def num(v):
         return float(v)
     except (TypeError, ValueError):
         return None
+
+
+def load_previous_actions(current_date: dt.date):
+    """直近の週次レポート（現在より前の日付）から、末尾のJSONブロック
+    （前回の「来週試すこと」の機械可読版）を取り出す。
+
+    形式が壊れている・見つからない場合は None を返し、呼び出し側は
+    「前回の提案なし」として扱う（レポート生成自体は止めない）。"""
+    if not REPORTS_DIR.exists():
+        return None
+    candidates = []
+    for p in REPORTS_DIR.glob("weekly-*.md"):
+        try:
+            d = dt.date.fromisoformat(p.stem.removeprefix("weekly-"))
+        except ValueError:
+            continue
+        if d < current_date:
+            candidates.append((d, p))
+    if not candidates:
+        return None
+    prev_date, prev_path = max(candidates, key=lambda t: t[0])
+    text = prev_path.read_text(encoding="utf-8")
+    blocks = re.findall(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if not blocks:
+        return None
+    try:
+        parsed = json.loads(blocks[-1])
+    except json.JSONDecodeError:
+        print(f"  [WARN] {prev_path} 末尾のJSONブロックの解析に失敗しました", file=sys.stderr)
+        return None
+    return {"report_date": prev_date.isoformat(), "actions": parsed.get("actions", [])}
+
+
+def find_action_followups(actions: list, events: list, period: list) -> list:
+    """前回提案した各施策について、events.csv に action_taken として
+    記録があるかどうかを機械的に突き合わせる（実行有無の唯一の確認手段）。"""
+    taken = [e for e in events if e.get("type") == "action_taken"
+            and period[0] <= e.get("date", "") <= period[1]]
+    out = []
+    for a in actions:
+        matched = [e["description"] for e in taken
+                  if a.get("id", "") and a["id"] in e.get("related_video_id", "") + e.get("description", "")]
+        out.append({**a, "logged_as_taken": bool(matched),
+                    "execution_note": matched[0] if matched else None})
+    return out
 
 
 def find_latest_snapshot() -> Path:
@@ -181,6 +227,14 @@ def build_stats(snapshot_dir: Path, latest_date: dt.date) -> dict:
 
     recent_events = [e for e in events if week_cutoff <= e.get("date", "") <= latest_date.isoformat()]
 
+    prev = load_previous_actions(latest_date)
+    previous_week_actions = None
+    if prev:
+        previous_week_actions = {
+            "report_date": prev["report_date"],
+            "actions": find_action_followups(prev["actions"], events, period),
+        }
+
     competitor_label = {c["channel_id"]: c for c in competitors_meta}
     competitors_summary = []
     for c in channels:
@@ -217,10 +271,14 @@ def build_stats(snapshot_dir: Path, latest_date: dt.date) -> dict:
                                     reverse=True)[:8]],
         "events_this_week": recent_events,
         "competitors": competitors_summary,
+        "previous_week_actions": previous_week_actions,
         "data_notes": [
             "thumbnail_impressions / thumbnail_ctr は、レポートジョブ作成から48時間経過するまで"
             "空欄になります（値が空の動画は、その旨を明記し、数値を創作しないでください）。",
             "pct_views_nonsubscriber は API の仕様上、動画単位では取得できません。",
+            "previous_week_actions の各項目の logged_as_taken は、events.csv に"
+            "type=action_taken として記録があるかどうかのみを表す。記録が無い場合、"
+            "実行しなかったと断定せず「記録が無いため実行有無は不明」と扱うこと。",
         ],
     }
 
@@ -245,18 +303,33 @@ SYSTEM_PROMPT = """\
   データに基づかない一般論（「もっと投稿頻度を増やしましょう」等の使い古された助言）は
   避け、今回のデータから導ける具体的な提案にすること。
 - 「要点を絞ること」は、1見出しあたりの分量を絞る意味であり、見出しそのものを省略して
-  よいという意味ではない。以下の7つの見出しは、対応するデータが乏しい場合でも必ず
+  よいという意味ではない。以下の8つの見出しは、対応するデータが乏しい場合でも必ず
   すべて出力すること。該当データが無い場合は「対象となる動画がありませんでした」等、
   その旨を1〜2行で明記すること（見出しごと省略しない）。
+- previous_week_actions が渡されている場合、「先週の振り返り」で、先週提案した各施策
+  について、今週の数字（該当する動画・コンテンツ形式の指標）がどう動いたかを照合する
+  こと。logged_as_taken が true の項目は「実行された前提」で効果を評価してよいが、
+  false（events.csvに記録が無い）の項目は、実行されたかどうか自体が不明である旨を
+  明記し、効果を断定しないこと。previous_week_actions が無い（初回など）場合は、
+  「先週の提案データがないため、今回は振り返りを省略します」と1行だけ書くこと。
 
-レポートの構成（この7つの見出しを、この順番ですべて出力すること）:
+レポートの構成（この8つの見出しを、この順番ですべて出力すること）:
 ## 今週のサマリー
+## 先週の振り返り
 ## 新着動画の診断
 ## 伸びた動画・伸びなかった動画
 ## 流入経路
 ## 出来事との関連
 ## 競合の状況
 ## 来週試すこと
+
+「## 来週試すこと」の直後には、人間向けの箇条書きに加えて、必ず以下の形式の
+JSONコードブロックを1つだけ出力すること（これは来週のレポート生成が、今週の
+提案を機械的に読み取るために使う。本文中の他の場所にJSONブロックを含めないこと）:
+
+```json
+{"actions": [{"id": "英数字とハイフンの短いID", "action": "やることの要約（日本語、1文）", "metric_to_watch": "確認すべき指標（日本語、簡潔に）", "target": "対象の動画タイトルやコンテンツ形式（任意、無ければ空文字）"}]}
+```
 """
 
 
@@ -282,8 +355,9 @@ def call_claude(system_prompt: str, user_prompt: str) -> str:
         print("  [WARN] レポートが max_tokens で打ち切られました（続きが欠けています）",
               file=sys.stderr)
         text += "\n\n> ⚠️ 出力上限に達したため、レポートが途中で打ち切られています。"
-    missing = [h for h in ("## 今週のサマリー", "## 新着動画の診断", "## 伸びた動画・伸びなかった動画",
-                           "## 流入経路", "## 出来事との関連", "## 競合の状況", "## 来週試すこと")
+    missing = [h for h in ("## 今週のサマリー", "## 先週の振り返り", "## 新着動画の診断",
+                           "## 伸びた動画・伸びなかった動画", "## 流入経路", "## 出来事との関連",
+                           "## 競合の状況", "## 来週試すこと")
               if h not in text]
     if missing:
         print(f"  [WARN] 見出しが欠けています: {missing}", file=sys.stderr)
