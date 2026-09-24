@@ -1,8 +1,21 @@
 date,type,description,related_video_id
 # 動画の伸びの「外部要因」を記録するシートです。行頭が # の行は無視されます。
 # date: 日本時間の日付 (YYYY-MM-DD)
-# type: announcement（告知投稿）/ match（試合）/ collab（コラボ）/ live（配信）/ press（メディア露出）/ other
+# type: announcement（告知投稿）/ match（試合）/ collab（コラボ）/ live（配信）/ press（メディア露出）
+#       / action_taken（週次レポートの「来週試すこと」を実際にやった記録）
+#       / ad_campaign（Google広告等、有料広告の出稿）/ other
 # description: 何が起きたかを一文で
-# related_video_id: 関連する動画があれば動画ID（任意）
+# related_video_id: 関連する動画があれば動画ID（任意）。
+#   type=action_taken の場合は、ここに週次レポート末尾のJSONブロックにある
+#   施策の "id"（英数字とハイフンの短い文字列）をそのまま入れてください。
+#   次週のレポートが、この記録をもとに「実行されたか」を判定します。
+#   type=ad_campaign の場合、対象動画が絞られていれば動画IDを。チャンネル全体
+#   向けの出稿なら空欄でよい。descriptionには、目標（視聴回数/登録者とエンゲージ
+#   メント等）・出稿期間（〜いつまで）・ざっくりの予算感を書いてください
+#   （例:「視聴回数目標、9/20〜9/27、予算5万円、ノルマ対応」）。
+#   analytics_traffic_source_daily.csv の ADVERTISING 行と突き合わせて、
+#   広告流入による伸びとオーガニックな伸びを切り分けるのに使います。
 # 例: 2026-09-14,match,AEW 出場試合,
 # 例: 2026-09-16,announcement,X で新作クリップを告知,abcdefghijk
+# 例: 2026-09-25,action_taken,Yakuza VODのサムネ構成を新作に反映した,yakuza-vod-format
+# 例: 2026-09-20,ad_campaign,視聴回数目標、9/20〜9/27、予算5万円、龍が如く配信者応援プロジェクトのノルマ対応,yakuza-vod-format

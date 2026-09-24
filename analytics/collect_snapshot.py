@@ -9,6 +9,12 @@
       - 動画ごとの維持率曲線
       - 日別の広告収益・CPM（yt-analytics-monetary.readonly scope が必要。未許可の
         場合はこのレポートだけ [WARN] を出してスキップし、他の取得は継続する）
+      - 日別×流入元（insightTrafficSourceType）の視聴回数・視聴時間。
+        ADVERTISING の行が、Google広告経由の視聴回数・視聴時間にあたる
+        （出稿していない期間はその日の行自体が存在しないか0件になる）。
+        events.csv に type=ad_campaign で出稿期間を記録しておくと、週次/月次
+        レポート側でこの日別データと突き合わせて「広告流入で伸びた分」と
+        「オーガニックな伸び」を切り分けやすくなる。
   [Reporting API] 動画ごとのサムネイル・インプレッション数とインプレッションCTR
       （Studio 画面でしか見えないと思われがちだが、バルクレポートで自動取得できる。
        詳細は reach_reports.py を参照）
@@ -180,6 +186,9 @@ ANALYTICS_REPORTS = {
         dimensions="day", sort="day",
         metrics="estimatedRevenue,estimatedAdRevenue,grossRevenue,"
                 "adImpressions,cpm,playbackBasedCpm"),
+    "analytics_traffic_source_daily": dict(
+        dimensions="day,insightTrafficSourceType", sort="day",
+        metrics="views,estimatedMinutesWatched"),
 }
 
 
