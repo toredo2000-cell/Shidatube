@@ -12,6 +12,14 @@ from googleapiclient.discovery import build
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.readonly",
     "https://www.googleapis.com/auth/yt-analytics.readonly",
+    # 広告収益（estimatedRevenue等）の取得に必要。この scope 追加後は、
+    # auth_setup.py を再実行して YT_REFRESH_TOKEN を発行し直す必要がある
+    # （既存のリフレッシュトークンには自動で追加されない）。
+    # さらに、Miyoさんのアカウントに YouTube Studio 側で「財務データの表示」権限が
+    # 付与されている必要がある（志田さん本人による権限付与が必要な場合あり）。
+    # 未許可の場合、この scope を使う Analytics レポートは 403 で失敗するが、
+    # collect_snapshot.py 側で警告を出して他のレポート取得は継続する。
+    "https://www.googleapis.com/auth/yt-analytics-monetary.readonly",
 ]
 
 PT = ZoneInfo("America/Los_Angeles")  # Analytics / Reporting の日次集計のタイムゾーン
