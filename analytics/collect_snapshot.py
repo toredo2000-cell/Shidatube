@@ -7,6 +7,8 @@
       - 形式別（Shorts・通常・ライブ）の推移、登録者と非登録者の視聴比率
       - 動画ごとの公開後の伸び方（公開日〜28日の日次）
       - 動画ごとの維持率曲線
+      - 日別の広告収益・CPM（yt-analytics-monetary.readonly scope が必要。未許可の
+        場合はこのレポートだけ [WARN] を出してスキップし、他の取得は継続する）
   [Reporting API] 動画ごとのサムネイル・インプレッション数とインプレッションCTR
       （Studio 画面でしか見えないと思われがちだが、バルクレポートで自動取得できる。
        詳細は reach_reports.py を参照）
@@ -174,6 +176,10 @@ ANALYTICS_REPORTS = {
     "analytics_demographics": dict(
         dimensions="ageGroup,gender", sort="ageGroup,gender",
         metrics="viewerPercentage"),
+    "analytics_revenue_daily": dict(
+        dimensions="day", sort="day",
+        metrics="estimatedRevenue,estimatedAdRevenue,grossRevenue,"
+                "adImpressions,cpm,playbackBasedCpm"),
 }
 
 
