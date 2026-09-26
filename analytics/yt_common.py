@@ -12,14 +12,24 @@ from googleapiclient.discovery import build
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.readonly",
     "https://www.googleapis.com/auth/yt-analytics.readonly",
-    # 広告収益（estimatedRevenue等）の取得に必要。この scope 追加後は、
-    # auth_setup.py を再実行して YT_REFRESH_TOKEN を発行し直す必要がある
-    # （既存のリフレッシュトークンには自動で追加されない）。
-    # さらに、Miyoさんのアカウントに YouTube Studio 側で「財務データの表示」権限が
-    # 付与されている必要がある（志田さん本人による権限付与が必要な場合あり）。
-    # 未許可の場合、この scope を使う Analytics レポートは 403 で失敗するが、
-    # collect_snapshot.py 側で警告を出して他のレポート取得は継続する。
-    "https://www.googleapis.com/auth/yt-analytics-monetary.readonly",
+    # 2026-09-26時点、下記スコープは一時的に外している。
+    #
+    # 広告収益（estimatedRevenue等）の取得に必要な scope だが、追加した際に
+    # auth_setup.py を再実行して YT_REFRESH_TOKEN を発行し直すのを忘れており、
+    # 既存のリフレッシュトークンがこの scope を含まないまま日次収集ジョブが
+    # 実行され続けた結果、Credentials のリフレッシュ自体が invalid_scope で
+    # 拒否され、日次データ取得が全滅する障害が発生した（このコメントの追加は
+    # その場しのぎの復旧）。
+    #
+    # 広告収益データを再び取得したくなったら、以下の手順で復旧すること:
+    #   1. 志田さんご本人に、Miyoさんのアカウントへ YouTube Studio の
+    #      「財務データの表示」権限を付与してもらう。
+    #   2. この行のコメントアウトを外す。
+    #   3. auth_setup.py をローカルで再実行し、新しい YT_REFRESH_TOKEN を発行、
+    #      GitHub Secrets の YT_REFRESH_TOKEN を新しい値に更新する
+    #      （既存のリフレッシュトークンには新しい scope が自動追加されないため、
+    #      再認可を飛ばすと今回と同じ invalid_scope 障害が再発する）。
+    # "https://www.googleapis.com/auth/yt-analytics-monetary.readonly",
 ]
 
 PT = ZoneInfo("America/Los_Angeles")  # Analytics / Reporting の日次集計のタイムゾーン
